@@ -1,0 +1,10 @@
+{
+  "name": "Titan V11.3",
+  "short_name": "Titan",
+  "description": "Antidetect Device Platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0e17",
+  "theme_color": "#00d4ff",
+  "icons": []
+}

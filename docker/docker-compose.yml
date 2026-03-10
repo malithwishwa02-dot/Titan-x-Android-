@@ -1,0 +1,100 @@
+version: "3.8"
+# Titan V11.3 — Antidetect Device Platform
+# Full stack: Redroid devices + Titan API + ws-scrcpy + Nginx
+
+services:
+  # ═══════════════════════════════════════════════════════════════════
+  # REDROID DEVICE INSTANCES
+  # Each device gets its own container, ADB port, and data volume.
+  # Additional devices are created dynamically by the API server
+  # via docker CLI — these are the template definitions.
+  # ═══════════════════════════════════════════════════════════════════
+
+  # Template device (not started by default — API creates instances)
+  # Shown here for reference. Real devices are launched by DeviceManager.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # TITAN API SERVER
+  # FastAPI backend serving all 10 app sections (62 tabs) + device mgmt
+  # ═══════════════════════════════════════════════════════════════════
+  titan-api:
+    build:
+      context: ../
+      dockerfile: docker/Dockerfile.titan-api
+    container_name: titan-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - titan-data:/opt/titan/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
+      - /usr/bin/adb:/usr/bin/adb
+      - ../console:/opt/titan/console
+      - ../core:/opt/titan/core
+      - ../server:/opt/titan/server
+      - ${TITAN_RELEASE:-/root/titan-v11-release/core}:/opt/titan/v11-core:ro
+    environment:
+      - TITAN_DATA=/opt/titan/data
+      - TITAN_GPU_URL=${TITAN_GPU_URL:-http://127.0.0.1:8765}
+      - TITAN_API_SECRET=${TITAN_API_SECRET:-}
+      - PYTHONPATH=/opt/titan/server:/opt/titan/core:/opt/titan/v11-core
+    networks:
+      - titan-net
+
+  # ═══════════════════════════════════════════════════════════════════
+  # WS-SCRCPY — H264 device screen streaming + multi-touch
+  # ═══════════════════════════════════════════════════════════════════
+  ws-scrcpy:
+    image: pocketbook/ws-scrcpy:latest
+    container_name: titan-scrcpy
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - /usr/bin/adb:/usr/bin/adb
+    networks:
+      - titan-net
+
+  # ═══════════════════════════════════════════════════════════════════
+  # NGINX — Reverse proxy + SSL termination
+  # ═══════════════════════════════════════════════════════════════════
+  nginx:
+    image: nginx:alpine
+    container_name: titan-nginx
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - titan-api
+      - ws-scrcpy
+    networks:
+      - titan-net
+
+  # ═══════════════════════════════════════════════════════════════════
+  # SEARXNG — Self-hosted search (for Intelligence/Dark Web tabs)
+  # ═══════════════════════════════════════════════════════════════════
+  searxng:
+    image: searxng/searxng:latest
+    container_name: titan-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8888:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+    volumes:
+      - searxng-data:/etc/searxng
+    networks:
+      - titan-net
+
+volumes:
+  titan-data:
+  searxng-data:
+
+networks:
+  titan-net:
+    driver: bridge
