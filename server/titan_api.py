@@ -153,7 +153,7 @@ async def create_device(body: CreateDeviceBody):
             defaults = COUNTRY_DEFAULTS.get(body.country, {})
             location = defaults.get("location", "nyc")
 
-        patcher = AnomalyPatcher(adb_target=dev.adb_target)
+        patcher = AnomalyPatcher(adb_target=dev.adb_target, container=dev.container)
         patch_result = patcher.full_patch(body.model, body.carrier, location)
         dev.patch_result = patch_result.to_dict()
         dev.stealth_score = patch_result.score

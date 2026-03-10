@@ -114,18 +114,25 @@ def generate_gaid() -> str:
 class AnomalyPatcher:
     """Full 53+ vector anomaly patcher for Redroid containers."""
 
-    def __init__(self, adb_target: str = "127.0.0.1:5555"):
+    def __init__(self, adb_target: str = "127.0.0.1:5555", container: str = ""):
         self.target = adb_target
+        self.container = container
         self._results: List[PatchResult] = []
 
-    # ─── ADB HELPERS ──────────────────────────────────────────────────
+    # ─── SHELL HELPERS ──────────────────────────────────────────────
 
     def _sh(self, cmd: str, timeout: int = 10) -> Tuple[bool, str]:
         try:
-            r = subprocess.run(
-                ["adb", "-s", self.target, "shell", cmd],
-                capture_output=True, text=True, timeout=timeout,
-            )
+            if self.container:
+                r = subprocess.run(
+                    ["docker", "exec", self.container, "sh", "-c", cmd],
+                    capture_output=True, text=True, timeout=timeout,
+                )
+            else:
+                r = subprocess.run(
+                    ["adb", "-s", self.target, "shell", cmd],
+                    capture_output=True, text=True, timeout=timeout,
+                )
             return r.returncode == 0, r.stdout.strip()
         except Exception as e:
             return False, str(e)
