@@ -163,11 +163,46 @@ class DeviceManager:
         self._devices[dev_id] = dev
         self._save_state()
 
-        # Launch Redroid container
+        # Resolve device preset for Docker identity props
+        from device_presets import DEVICE_PRESETS
+        preset = DEVICE_PRESETS.get(req.model)
+
+        # Build Docker launch command with full device identity baked in
+        identity_args = ""
+        if preset:
+            identity_args = (
+                f"ro.product.brand={preset.brand} "
+                f"ro.product.manufacturer={preset.manufacturer} "
+                f"ro.product.model={preset.model} "
+                f"ro.product.device={preset.device} "
+                f"ro.product.name={preset.product} "
+                f"ro.build.fingerprint={preset.fingerprint} "
+                f"ro.build.display.id={preset.build_id} "
+                f"ro.build.version.release={preset.android_version} "
+                f"ro.build.version.sdk={preset.sdk_version} "
+                f"ro.build.version.security_patch={preset.security_patch} "
+                f"ro.build.type={preset.build_type} "
+                f"ro.build.tags={preset.build_tags} "
+                f"ro.hardware={preset.hardware} "
+                f"ro.board.platform={preset.board} "
+                f"ro.bootloader={preset.bootloader} "
+                f"ro.baseband={preset.baseband} "
+                f"ro.sf.lcd_density={preset.lcd_density} "
+                f"ro.boot.verifiedbootstate=green "
+                f"ro.boot.vbmeta.device_state=locked "
+                f"ro.boot.flash.locked=1 "
+                f"ro.build.selinux=1 "
+                f"ro.allow.mock.location=0 "
+                f"ro.kernel.qemu=0 "
+                f"ro.hardware.virtual=0 "
+                f"ro.boot.qemu=0 "
+            )
+
         docker_cmd = (
             f"docker run -d --privileged "
             f"--name {container} "
             f"-v {data_dir}:/data "
+            f"-v /dev/binderfs:/dev/binderfs "
             f"-p 127.0.0.1:{port}:5555 "
             f"--memory=3g --cpus=2 "
             f"{REDROID_IMAGE} "
@@ -176,9 +211,10 @@ class DeviceManager:
             f"androidboot.redroid_dpi={req.dpi} "
             f"androidboot.redroid_fps=60 "
             f"androidboot.redroid_gpu_mode=guest "
-            f'androidboot.redroid_net_ndns=2 '
-            f'androidboot.redroid_net_dns1=8.8.8.8 '
-            f'androidboot.redroid_net_dns2=8.8.4.4 '
+            f"androidboot.redroid_net_ndns=2 "
+            f"androidboot.redroid_net_dns1=8.8.8.8 "
+            f"androidboot.redroid_net_dns2=8.8.4.4 "
+            f"{identity_args}"
         )
 
         logger.info(f"Creating device {dev_id} on port {port}")
@@ -192,6 +228,20 @@ class DeviceManager:
 
         dev.state = "booting"
         self._save_state()
+
+        # Inject host ADB key into container for authorization
+        await asyncio.sleep(3)  # Let container init start
+        adb_key_path = Path.home() / ".android" / "adbkey.pub"
+        if adb_key_path.exists():
+            key_data = adb_key_path.read_text().strip()
+            _run(f"docker exec {container} mkdir -p /data/misc/adb", timeout=10)
+            _run(f"docker exec {container} sh -c 'echo \"{key_data}\" > /data/misc/adb/adb_keys'", timeout=10)
+            _run(f"docker exec {container} chmod 640 /data/misc/adb/adb_keys", timeout=10)
+            logger.info(f"Injected ADB key into {container}")
+
+        # Disconnect phantom emulator devices
+        _run("adb disconnect emulator-5554 2>/dev/null", timeout=5)
+        _run("adb disconnect emulator-5556 2>/dev/null", timeout=5)
 
         # Wait for ADB
         await self._wait_for_adb(dev)

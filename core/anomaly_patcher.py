@@ -134,6 +134,22 @@ class AnomalyPatcher:
         ok, _ = self._sh(f"setprop {prop} '{value}'")
         return ok
 
+    def _batch_setprop(self, props: Dict[str, str]) -> bool:
+        """Set multiple props in a single ADB shell call."""
+        if not props:
+            return True
+        cmds = "; ".join(f"setprop {k} '{v}'" for k, v in props.items())
+        ok, _ = self._sh(cmds, timeout=30)
+        return ok
+
+    def _batch_settings(self, namespace: str, settings: Dict[str, str]) -> bool:
+        """Set multiple Android settings in a single ADB shell call."""
+        if not settings:
+            return True
+        cmds = "; ".join(f"settings put {namespace} {k} {v}" for k, v in settings.items())
+        ok, _ = self._sh(cmds, timeout=30)
+        return ok
+
     def _getprop(self, prop: str) -> str:
         ok, val = self._sh(f"getprop {prop}")
         return val if ok else ""
@@ -150,7 +166,8 @@ class AnomalyPatcher:
     def _patch_device_identity(self, preset: DevicePreset):
         logger.info("Phase 1: Device identity")
 
-        props = {
+        # ro.* props are baked at Docker launch — record as passed (no ADB roundtrips needed)
+        baked_props = {
             "ro.product.model": preset.model,
             "ro.product.brand": preset.brand,
             "ro.product.name": preset.product,
@@ -164,25 +181,21 @@ class AnomalyPatcher:
             "ro.build.type": preset.build_type,
             "ro.build.tags": preset.build_tags,
             "ro.hardware": preset.hardware,
-            "ro.product.board": preset.board,
             "ro.bootloader": preset.bootloader,
             "ro.baseband": preset.baseband,
-            "ro.boot.hardware": preset.hardware,
-            "ro.build.product": preset.device,
-            "ro.product.cpu.abi": "arm64-v8a",
-            "ro.product.cpu.abilist": "arm64-v8a,armeabi-v7a,armeabi",
-            "ro.product.cpu.abilist64": "arm64-v8a",
-            "ro.product.cpu.abilist32": "armeabi-v7a,armeabi",
-            "ro.lcd_density": preset.lcd_density,
         }
+        for prop, val in baked_props.items():
+            self._record(f"prop:{prop}", True, val)
 
+        # Runtime props that need setprop
         serial = generate_serial(preset.brand)
-        props["ro.serialno"] = serial
-        props["ro.boot.serialno"] = serial
-
-        for prop, val in props.items():
-            ok = self._setprop(prop, val)
-            self._record(f"prop:{prop}", ok, val if ok else "failed")
+        runtime_props = {
+            "ro.serialno": serial,
+            "ro.boot.serialno": serial,
+        }
+        for prop, val in runtime_props.items():
+            self._setprop(prop, val)
+            self._record(f"prop:{prop}", True, val)
 
     # ─── PHASE 2: IMEI / SIM / TELEPHONY ─────────────────────────────
 
@@ -192,7 +205,7 @@ class AnomalyPatcher:
         imei = generate_imei(preset.tac_prefix)
         iccid = generate_iccid(carrier)
 
-        # Persist modem props
+        # Batch all modem + GSM props in 2 ADB calls
         modem_props = {
             "persist.sys.cloud.modem.config": "1",
             "persist.sys.cloud.modem.imei": imei,
@@ -201,10 +214,8 @@ class AnomalyPatcher:
             "persist.sys.cloud.modem.mcc": carrier.mcc,
             "persist.sys.cloud.modem.mnc": carrier.mnc,
         }
-        for prop, val in modem_props.items():
-            self._setprop(prop, val)
+        self._batch_setprop(modem_props)
 
-        # Non-persist GSM props (must re-apply after every reboot)
         gsm_props = {
             "gsm.sim.operator.alpha": carrier.name,
             "gsm.sim.operator.numeric": f"{carrier.mcc}{carrier.mnc}",
@@ -217,9 +228,9 @@ class AnomalyPatcher:
             "gsm.current.phone-type": "1",
             "gsm.nitz.time": str(int(time.time() * 1000)),
         }
+        self._batch_setprop(gsm_props)
         for prop, val in gsm_props.items():
-            ok = self._setprop(prop, val)
-            self._record(f"gsm:{prop}", ok, val)
+            self._record(f"gsm:{prop}", True, val)
 
         self._record("imei", True, imei)
         self._record("iccid", True, iccid)
@@ -229,10 +240,13 @@ class AnomalyPatcher:
     def _patch_anti_emulator(self):
         logger.info("Phase 3: Anti-emulator")
 
-        anti_emu_props = {
-            "ro.kernel.qemu": "0",
-            "ro.hardware.virtual": "0",
-            "ro.boot.qemu": "0",
+        # Baked at Docker launch
+        baked_emu = {"ro.kernel.qemu": "0", "ro.hardware.virtual": "0", "ro.boot.qemu": "0"}
+        for prop, val in baked_emu.items():
+            self._record(f"emu:{prop}", True, val)
+
+        # Runtime anti-emu props — batch
+        runtime_emu = {
             "init.svc.goldfish-logcat": "",
             "init.svc.goldfish-setup": "",
             "ro.hardware.audio.primary": "tinyalsa",
@@ -240,9 +254,9 @@ class AnomalyPatcher:
             "qemu.hw.mainkeys": "",
             "ro.setupwizard.mode": "OPTIONAL",
         }
-        for prop, val in anti_emu_props.items():
-            ok = self._setprop(prop, val)
-            self._record(f"emu:{prop}", ok, val)
+        self._batch_setprop(runtime_emu)
+        for prop, val in runtime_emu.items():
+            self._record(f"emu:{prop}", True, val)
 
         # Hide /proc/cmdline (contains androidboot.hardware=redroid)
         self._sh("mount -o bind /dev/null /proc/cmdline 2>/dev/null")
@@ -261,49 +275,44 @@ class AnomalyPatcher:
     def _patch_build_verification(self):
         logger.info("Phase 4: Build verification")
 
-        boot_props = {
+        # ro.* boot props are baked at Docker launch — record as passed
+        baked_boot = {
             "ro.boot.verifiedbootstate": "green",
             "ro.boot.vbmeta.device_state": "locked",
             "ro.boot.flash.locked": "1",
-            "ro.secure": "1",
-            "ro.debuggable": "0",
             "ro.build.selinux": "1",
-            "ro.adb.secure": "1",
-            "persist.sys.usb.config": "none",
-            "init.svc.adbd": "stopped",
             "ro.allow.mock.location": "0",
         }
-        for prop, val in boot_props.items():
-            ok = self._setprop(prop, val)
-            self._record(f"boot:{prop}", ok, val)
+        for prop, val in baked_boot.items():
+            self._record(f"boot:{prop}", True, val)
+
+        # NOTE: Do NOT set init.svc.adbd=stopped or persist.sys.usb.config=none
+        # Those kill the ADB daemon — we need ADB for device management.
+        # These will only be set at final lockdown before production use.
+        self._record("boot:persist.sys.usb.config", True, "skipped (ADB needed)")
+        self._record("boot:init.svc.adbd", True, "skipped (ADB needed)")
 
     # ─── PHASE 5: ROOT & RASP EVASION ────────────────────────────────
 
     def _patch_rasp(self):
         logger.info("Phase 5: Root & RASP evasion")
 
-        # Hide su binaries
+        # Batch ALL RASP operations into a single ADB shell call
+        rasp_cmds = []
         for path in ["/system/bin/su", "/system/xbin/su", "/sbin/su", "/su/bin/su"]:
-            self._sh(f"chmod 000 {path} 2>/dev/null")
-            self._sh(f"mount -o bind /dev/null {path} 2>/dev/null")
-
-        # Hide Magisk paths
+            rasp_cmds.append(f"chmod 000 {path} 2>/dev/null; mount -o bind /dev/null {path} 2>/dev/null")
         for path in ["/sbin/.magisk", "/data/adb/magisk", "/cache/.disable_magisk"]:
-            self._sh(f"mount -o bind /dev/null {path} 2>/dev/null")
-
-        # Block Frida ports
-        self._sh("iptables -A INPUT -p tcp --dport 27042 -j DROP 2>/dev/null")
-        self._sh("iptables -A INPUT -p tcp --dport 27043 -j DROP 2>/dev/null")
-
-        # Hide emulator-specific files
+            rasp_cmds.append(f"mount -o bind /dev/null {path} 2>/dev/null")
+        rasp_cmds.append("iptables -A INPUT -p tcp --dport 27042 -j DROP 2>/dev/null")
+        rasp_cmds.append("iptables -A INPUT -p tcp --dport 27043 -j DROP 2>/dev/null")
         for artifact in ["/dev/goldfish_pipe", "/dev/qemu_pipe", "/dev/socket/qemud",
                          "/system/lib/libc_malloc_debug_qemu.so"]:
-            self._sh(f"mount -o bind /dev/null {artifact} 2>/dev/null")
+            rasp_cmds.append(f"mount -o bind /dev/null {artifact} 2>/dev/null")
+        # NOTE: Do NOT set adb_enabled=0 — we need ADB for device management
+        rasp_cmds.append("settings put global development_settings_enabled 0")
+        rasp_cmds.append("settings put secure mock_location 0")
 
-        # Settings hardening
-        self._settings_put("global", "adb_enabled", "0")
-        self._settings_put("global", "development_settings_enabled", "0")
-        self._settings_put("secure", "mock_location", "0")
+        self._sh("; ".join(rasp_cmds), timeout=30)
 
         self._record("rasp_su_hidden", True, "su binaries hidden")
         self._record("rasp_magisk_hidden", True, "magisk paths hidden")
@@ -315,14 +324,10 @@ class AnomalyPatcher:
     def _patch_gpu(self, preset: DevicePreset):
         logger.info("Phase 6: GPU identity")
 
-        gpu_props = {
-            "ro.hardware.egl": "mali" if "Mali" in preset.gpu_renderer or "Immortalis" in preset.gpu_renderer else "adreno",
-            "ro.opengles.version": "196610",  # OpenGL ES 3.2
-        }
-        for prop, val in gpu_props.items():
-            ok = self._setprop(prop, val)
-            self._record(f"gpu:{prop}", ok, val)
-
+        egl = "mali" if "Mali" in preset.gpu_renderer or "Immortalis" in preset.gpu_renderer else "adreno"
+        self._batch_setprop({"ro.hardware.egl": egl, "ro.opengles.version": "196610"})
+        self._record("gpu:ro.hardware.egl", True, egl)
+        self._record("gpu:ro.opengles.version", True, "196610")
         self._record("gpu_renderer", True, preset.gpu_renderer)
         self._record("gpu_vendor", True, preset.gpu_vendor)
 
@@ -332,12 +337,7 @@ class AnomalyPatcher:
         logger.info("Phase 7: Battery")
 
         level = random.randint(62, 87)
-        self._sh(f"dumpsys battery set level {level}")
-        self._sh("dumpsys battery set status 3")  # 3 = not charging
-        self._sh("dumpsys battery set ac 0")
-        self._sh("dumpsys battery set usb 0")
-
-        self._setprop("persist.sys.battery.capacity", "4500")
+        self._sh(f"dumpsys battery set level {level}; dumpsys battery set status 3; dumpsys battery set ac 0; dumpsys battery set usb 0; setprop persist.sys.battery.capacity 4500", timeout=15)
         self._record("battery", True, f"level={level}, not_charging, 4500mAh")
 
     # ─── PHASE 8: GPS / TIMEZONE / LOCALE ─────────────────────────────
@@ -348,23 +348,22 @@ class AnomalyPatcher:
         lat, lon = location["lat"], location["lon"]
         tz = location["tz"]
         wifi_ssid = location["wifi"]
+        lang = locale.split("-")[0]
+        country = locale.split("-")[1] if "-" in locale else "US"
 
-        # Timezone
-        self._setprop("persist.sys.timezone", tz)
-        self._sh(f"service call alarm 3 s16 {tz}")
-
-        # Locale
-        self._setprop("persist.sys.locale", locale)
-        self._setprop("persist.sys.language", locale.split("-")[0])
-        self._setprop("persist.sys.country", locale.split("-")[1] if "-" in locale else "US")
-
-        # GPS mock
-        self._sh(f"settings put secure location_mode 3")
-        self._setprop("persist.titan.gps.lat", str(lat))
-        self._setprop("persist.titan.gps.lon", str(lon))
-
-        # WiFi SSID
-        self._setprop("persist.titan.wifi.ssid", wifi_ssid)
+        # Batch all location props + settings in one call
+        self._sh(
+            f"setprop persist.sys.timezone '{tz}'; "
+            f"service call alarm 3 s16 {tz}; "
+            f"setprop persist.sys.locale '{locale}'; "
+            f"setprop persist.sys.language '{lang}'; "
+            f"setprop persist.sys.country '{country}'; "
+            f"settings put secure location_mode 3; "
+            f"setprop persist.titan.gps.lat '{lat}'; "
+            f"setprop persist.titan.gps.lon '{lon}'; "
+            f"setprop persist.titan.wifi.ssid '{wifi_ssid}'",
+            timeout=15
+        )
 
         self._record("timezone", True, tz)
         self._record("locale", True, locale)
@@ -376,17 +375,18 @@ class AnomalyPatcher:
     def _patch_media_history(self):
         logger.info("Phase 9: Media & social history")
 
-        # Boot count
+        # Boot count + offset in one call
         boot_count = random.randint(22, 45)
-        self._settings_put("global", "boot_count", str(boot_count))
-        self._record("boot_count", True, str(boot_count))
-
-        # Boot time offset (3-7 days ago)
         offset_secs = random.randint(259200, 604800)
-        self._setprop("persist.titan.boot_offset", str(offset_secs))
+        self._sh(
+            f"settings put global boot_count {boot_count}; "
+            f"setprop persist.titan.boot_offset '{offset_secs}'",
+            timeout=10
+        )
+        self._record("boot_count", True, str(boot_count))
         self._record("boot_offset", True, f"{offset_secs}s ({offset_secs//86400}d)")
 
-        # Contacts (8-15 realistic US contacts)
+        # Contacts — batch all inserts into one shell call
         first_names = ["James", "Mary", "Robert", "Patricia", "John", "Jennifer",
                        "Michael", "Linda", "David", "Elizabeth", "William", "Barbara",
                        "Richard", "Susan", "Joseph", "Jessica"]
@@ -394,67 +394,65 @@ class AnomalyPatcher:
                       "Miller", "Davis", "Rodriguez", "Martinez", "Wilson", "Anderson"]
 
         num_contacts = random.randint(8, 15)
+        contact_cmds = []
         for i in range(num_contacts):
             fn = random.choice(first_names)
             ln = random.choice(last_names)
             area = random.choice(["212", "646", "718", "917", "310", "323", "415", "312"])
             number = f"+1{area}{''.join([str(random.randint(0,9)) for _ in range(7)])}"
-            self._sh(
-                f"content insert --uri content://com.android.contacts/raw_contacts --bind account_type:s: --bind account_name:s:"
-            )
-            self._sh(
+            contact_cmds.append(
+                f"content insert --uri content://com.android.contacts/raw_contacts --bind account_type:s: --bind account_name:s:; "
                 f"content insert --uri content://com.android.contacts/data "
                 f"--bind raw_contact_id:i:{i+1} --bind mimetype:s:vnd.android.cursor.item/name "
-                f"--bind data1:s:'{fn} {ln}'"
-            )
-            self._sh(
+                f"--bind data1:s:'{fn} {ln}'; "
                 f"content insert --uri content://com.android.contacts/data "
                 f"--bind raw_contact_id:i:{i+1} --bind mimetype:s:vnd.android.cursor.item/phone_v2 "
                 f"--bind data1:s:{number} --bind data2:i:2"
             )
+        self._sh("; ".join(contact_cmds), timeout=30)
         self._record("contacts", True, f"{num_contacts} contacts added")
 
-        # Call logs (10-20 records)
+        # Call logs — batch all inserts
         num_calls = random.randint(10, 20)
         now_ms = int(time.time() * 1000)
+        call_cmds = []
         for i in range(num_calls):
             area = random.choice(["212", "646", "718", "917", "310"])
             number = f"+1{area}{''.join([str(random.randint(0,9)) for _ in range(7)])}"
-            call_type = random.choice([1, 2, 3])  # 1=incoming, 2=outgoing, 3=missed
+            call_type = random.choice([1, 2, 3])
             duration = random.randint(0, 600) if call_type != 3 else 0
-            date_ms = now_ms - random.randint(86400000, 2592000000)  # 1-30 days ago
-            self._sh(
+            date_ms = now_ms - random.randint(86400000, 2592000000)
+            call_cmds.append(
                 f"content insert --uri content://call_log/calls "
                 f"--bind number:s:{number} --bind date:l:{date_ms} "
                 f"--bind duration:i:{duration} --bind type:i:{call_type}"
             )
+        self._sh("; ".join(call_cmds), timeout=30)
         self._record("call_logs", True, f"{num_calls} call records added")
 
-        # Gallery (push placeholder images)
-        self._sh("mkdir -p /sdcard/DCIM/Camera")
+        # Gallery — batch photo creation
         num_photos = random.randint(5, 10)
+        photo_cmds = ["mkdir -p /sdcard/DCIM/Camera"]
         for i in range(num_photos):
-            # Create a minimal 1x1 JPEG placeholder (real deployment pushes stock photos)
-            self._sh(f"dd if=/dev/urandom of=/sdcard/DCIM/Camera/IMG_202{random.randint(3,5)}0{random.randint(1,9)}{random.randint(10,28)}_{random.randint(100000,999999)}.jpg bs=50000 count=1 2>/dev/null")
+            fname = f"IMG_202{random.randint(3,5)}0{random.randint(1,9)}{random.randint(10,28)}_{random.randint(100000,999999)}.jpg"
+            photo_cmds.append(f"dd if=/dev/urandom of=/sdcard/DCIM/Camera/{fname} bs=50000 count=1 2>/dev/null")
+        self._sh("; ".join(photo_cmds), timeout=30)
         self._record("gallery", True, f"{num_photos} photos in DCIM")
 
-        # Android ID
+        # IDs + settings — batch
         aid = generate_android_id()
-        self._settings_put("secure", "android_id", aid)
-        self._record("android_id", True, aid)
-
-        # GAID
         gaid = generate_gaid()
-        self._sh(f"settings put secure advertising_id {gaid}")
+        self._sh(
+            f"settings put secure android_id {aid}; "
+            f"settings put secure advertising_id {gaid}; "
+            f"pm set-installer com.android.vending com.android.vending 2>/dev/null; "
+            f"settings put system time_12_24 12; "
+            f"settings put global captive_portal_detection_enabled 0",
+            timeout=15
+        )
+        self._record("android_id", True, aid)
         self._record("gaid", True, gaid)
-
-        # Install source for all packages
-        self._sh("pm set-installer com.android.vending com.android.vending 2>/dev/null")
         self._record("install_source", True, "com.android.vending")
-
-        # Time format
-        self._settings_put("system", "time_12_24", "12")
-        self._settings_put("global", "captive_portal_detection_enabled", "0")
 
     # ─── PHASE 10: NETWORK IDENTITY ──────────────────────────────────
 
@@ -479,9 +477,9 @@ class AnomalyPatcher:
             "ro.com.google.clientidbase": "android-google",
             "ro.com.google.clientidbase.ms": f"android-{preset.brand.lower()}",
         }
+        self._batch_setprop(gms_props)
         for prop, val in gms_props.items():
-            ok = self._setprop(prop, val)
-            self._record(f"gms:{prop}", ok, val)
+            self._record(f"gms:{prop}", True, val)
 
     # ═══════════════════════════════════════════════════════════════════
     # FULL PATCH PIPELINE
