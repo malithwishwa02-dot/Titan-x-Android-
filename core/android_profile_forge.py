@@ -367,6 +367,18 @@ class AndroidProfileForge:
         # ─── App install timestamps ───────────────────────────────────
         app_installs = self._forge_app_installs(now, age_days, locale)
 
+        # ─── Play Store purchase history ─────────────────────────────
+        play_purchases = self._forge_play_purchases(now, age_days, persona_email, locale)
+
+        # ─── App usage stats ─────────────────────────────────────────
+        app_usage = self._forge_app_usage(now, age_days, locale)
+
+        # ─── Notification history ────────────────────────────────────
+        notifications = self._forge_notifications(now, age_days, locale)
+
+        # ─── Email receipts ──────────────────────────────────────────
+        email_receipts = self._forge_email_receipts(now, age_days, persona_email, locale)
+
         # ─── Build final profile ──────────────────────────────────────
         profile = {
             "id": profile_id,
@@ -392,6 +404,10 @@ class AndroidProfileForge:
             "autofill": autofill,
             "wifi_networks": wifi_networks,
             "app_installs": app_installs,
+            "play_purchases": play_purchases,
+            "app_usage": app_usage,
+            "notifications": notifications,
+            "email_receipts": email_receipts,
             "local_storage": {},
             # Stats
             "stats": {
@@ -403,6 +419,10 @@ class AndroidProfileForge:
                 "gallery": len(gallery_paths),
                 "apps": len(app_installs),
                 "wifi": len(wifi_networks),
+                "play_purchases": len(play_purchases),
+                "app_usage": len(app_usage),
+                "notifications": len(notifications),
+                "email_receipts": len(email_receipts),
             },
         }
 
@@ -827,6 +847,326 @@ class AndroidProfileForge:
             })
 
         return installs
+
+    # ─── PLAY STORE PURCHASES ──────────────────────────────────────────
+
+    def _forge_play_purchases(self, now: datetime, age_days: int,
+                              persona_email: str, locale: str) -> List[Dict]:
+        """Generate Play Store purchase history (apps, subscriptions, IAPs)."""
+        rng = self._rng
+        purchases = []
+
+        # Free app installs (lots of these — 30-80 over profile age)
+        free_apps = [
+            ("com.whatsapp", "WhatsApp Messenger", 0),
+            ("com.instagram.android", "Instagram", 0),
+            ("com.spotify.music", "Spotify: Music and Podcasts", 0),
+            ("com.netflix.mediaclient", "Netflix", 0),
+            ("com.twitter.android", "X", 0),
+            ("com.zhiliaoapp.musically", "TikTok", 0),
+            ("com.snapchat.android", "Snapchat", 0),
+            ("com.ubercab", "Uber - Request a ride", 0),
+            ("com.dd.doordash", "DoorDash - Food Delivery", 0),
+            ("com.weather.Weather", "The Weather Channel", 0),
+            ("com.shazam.android", "Shazam: Find Music & Concerts", 0),
+            ("com.duolingo", "Duolingo: Language Lessons", 0),
+            ("com.google.android.apps.fitness", "Google Fit", 0),
+            ("com.amazon.mShop.android.shopping", "Amazon Shopping", 0),
+            ("com.ebay.mobile", "eBay: Online Shopping Deals", 0),
+            ("org.telegram.messenger", "Telegram", 0),
+            ("com.google.android.keep", "Google Keep", 0),
+            ("com.google.android.apps.photos", "Google Photos", 0),
+        ]
+
+        num_free = rng.randint(30, min(80, len(free_apps) + 60))
+        selected_free = rng.sample(free_apps, min(num_free, len(free_apps)))
+        for pkg, name, _ in selected_free:
+            install_day = rng.randint(1, max(2, age_days - 1))
+            dt = now - timedelta(days=install_day)
+            purchases.append({
+                "account": persona_email,
+                "doc_id": pkg,
+                "doc_type": 1,  # app
+                "title": name,
+                "offer_type": 1,  # free
+                "price_micros": 0,
+                "currency": "USD" if locale == "US" else "GBP" if locale == "GB" else "EUR",
+                "purchase_time": int(dt.timestamp() * 1000),
+            })
+
+        # Paid app purchases (1-4)
+        paid_apps = [
+            ("com.weather.forecast.channel.smart", "Weather Forecast Pro", 299),
+            ("com.nianticlabs.pokemongo", "Pokémon GO (coins)", 999),
+            ("com.mojang.minecraftpe", "Minecraft", 699),
+            ("org.videolan.vlc", "VLC for Android (donate)", 199),
+            ("com.teslacoilsw.launcher.prime", "Nova Launcher Prime", 499),
+        ]
+        num_paid = rng.randint(1, min(4, len(paid_apps)))
+        for pkg, name, price in rng.sample(paid_apps, num_paid):
+            dt = _random_datetime(rng, now, 5, min(age_days, 60))
+            purchases.append({
+                "account": persona_email,
+                "doc_id": pkg,
+                "doc_type": 1,
+                "title": name,
+                "offer_type": 2,  # paid
+                "price_micros": price * 1000,
+                "currency": "USD" if locale == "US" else "GBP" if locale == "GB" else "EUR",
+                "purchase_time": int(dt.timestamp() * 1000),
+            })
+
+        # Subscriptions (1-3)
+        subs = [
+            ("com.spotify.music", "Spotify Premium", 999, 30),
+            ("com.google.android.youtube", "YouTube Premium", 1399, 30),
+            ("com.google.android.apps.subscriptions.red", "Google One (100GB)", 199, 30),
+        ]
+        num_subs = rng.randint(1, min(3, len(subs)))
+        for pkg, name, price, interval in rng.sample(subs, num_subs):
+            # First purchase backdated, then recurring
+            first_dt = now - timedelta(days=rng.randint(30, min(age_days, 90)))
+            purchases.append({
+                "account": persona_email,
+                "doc_id": f"{pkg}:subs",
+                "doc_type": 4,  # subscription
+                "title": name,
+                "offer_type": 3,  # subscription
+                "price_micros": price * 1000,
+                "currency": "USD" if locale == "US" else "GBP" if locale == "GB" else "EUR",
+                "purchase_time": int(first_dt.timestamp() * 1000),
+                "auto_renewing": True,
+                "renewal_interval_days": interval,
+            })
+
+        purchases.sort(key=lambda x: x["purchase_time"], reverse=True)
+        return purchases
+
+    # ─── APP USAGE STATS ───────────────────────────────────────────────
+
+    def _forge_app_usage(self, now: datetime, age_days: int, locale: str) -> List[Dict]:
+        """Generate per-app usage statistics (daily open counts, screen time)."""
+        rng = self._rng
+
+        # App usage patterns: (package, avg_daily_minutes, open_frequency)
+        usage_patterns = [
+            ("com.android.chrome", rng.randint(15, 45), 0.85),
+            ("com.instagram.android", rng.randint(20, 60), 0.75),
+            ("com.whatsapp", rng.randint(15, 40), 0.90),
+            ("com.google.android.youtube", rng.randint(20, 50), 0.70),
+            ("com.google.android.gm", rng.randint(5, 15), 0.80),
+            ("com.google.android.apps.maps", rng.randint(3, 10), 0.30),
+            ("com.spotify.music", rng.randint(30, 90), 0.60),
+            ("com.android.vending", rng.randint(2, 8), 0.40),
+        ]
+
+        if locale == "US":
+            usage_patterns.extend([
+                ("com.venmo", rng.randint(2, 8), 0.25),
+                ("com.dd.doordash", rng.randint(3, 10), 0.20),
+                ("com.amazon.mShop.android.shopping", rng.randint(5, 15), 0.35),
+                ("com.chase.sig.android", rng.randint(2, 5), 0.30),
+            ])
+        elif locale == "GB":
+            usage_patterns.extend([
+                ("com.monzo.android", rng.randint(2, 8), 0.35),
+                ("com.deliveroo.orderapp", rng.randint(3, 8), 0.20),
+                ("com.revolut.revolut", rng.randint(2, 5), 0.25),
+            ])
+
+        usage_stats = []
+        for pkg, avg_minutes, frequency in usage_patterns:
+            # Generate daily stats for the last 14 days
+            daily_stats = []
+            for day_offset in range(min(14, age_days)):
+                if rng.random() > frequency:
+                    continue  # Didn't use app that day
+                dt = now - timedelta(days=day_offset)
+                opens = rng.randint(1, max(2, int(avg_minutes / 5)))
+                minutes = max(1, int(avg_minutes * rng.uniform(0.3, 1.8)))
+                daily_stats.append({
+                    "date": dt.strftime("%Y-%m-%d"),
+                    "opens": opens,
+                    "minutes": minutes,
+                    "last_open": int(dt.replace(
+                        hour=_circadian_hour(rng),
+                        minute=rng.randint(0, 59),
+                    ).timestamp() * 1000),
+                })
+
+            if daily_stats:
+                total_minutes = sum(d["minutes"] for d in daily_stats)
+                total_opens = sum(d["opens"] for d in daily_stats)
+                usage_stats.append({
+                    "package": pkg,
+                    "total_minutes": total_minutes,
+                    "total_opens": total_opens,
+                    "avg_daily_minutes": total_minutes // max(len(daily_stats), 1),
+                    "days_active": len(daily_stats),
+                    "last_used": max(d["last_open"] for d in daily_stats),
+                    "daily": daily_stats,
+                })
+
+        usage_stats.sort(key=lambda x: x["total_minutes"], reverse=True)
+        return usage_stats
+
+    # ─── NOTIFICATION HISTORY ──────────────────────────────────────────
+
+    def _forge_notifications(self, now: datetime, age_days: int, locale: str) -> List[Dict]:
+        """Generate recent notification records (last 7 days)."""
+        rng = self._rng
+        notifications = []
+
+        # Notification templates: (package, title_template, body_template, frequency_per_day)
+        notif_templates = [
+            ("com.google.android.gm", "New email from {sender}",
+             "{subject}", 3.0),
+            ("com.whatsapp", "{contact}: {message}",
+             "", 5.0),
+            ("com.instagram.android", "{user} liked your photo",
+             "", 2.0),
+            ("com.android.vending", "Update available",
+             "{app} update ready to install", 0.5),
+        ]
+
+        if locale == "US":
+            notif_templates.extend([
+                ("com.chase.sig.android", "Transaction alert",
+                 "Purchase of ${amount} at {merchant} approved", 0.8),
+                ("com.dd.doordash", "Your order is on the way!",
+                 "Estimated arrival: {time}", 0.3),
+                ("com.venmo", "{person} paid you ${amount}",
+                 "", 0.2),
+            ])
+        elif locale == "GB":
+            notif_templates.extend([
+                ("com.monzo.android", "Payment",
+                 "You spent £{amount} at {merchant}", 0.8),
+                ("com.deliveroo.orderapp", "Your food is being prepared",
+                 "Estimated delivery: {time}", 0.3),
+            ])
+
+        # Generic fillers
+        senders = ["Sarah", "Mike", "Amazon", "LinkedIn", "DoorDash", "Mom", "Work"]
+        subjects = ["Meeting tomorrow", "Your order shipped", "Weekly summary",
+                    "New connection request", "Receipt for your purchase"]
+        contacts = ["Mom", "Sarah", "Mike", "Dave", "Work Group"]
+        merchants = ["WALMART", "STARBUCKS", "TARGET", "AMAZON", "SHELL", "UBER"]
+        apps_to_update = ["Instagram", "WhatsApp", "Chrome", "YouTube", "Spotify"]
+
+        for day_offset in range(min(7, age_days)):
+            dt_base = now - timedelta(days=day_offset)
+            for pkg, title_tmpl, body_tmpl, freq in notif_templates:
+                # Poisson-like: some days more, some less
+                count = max(0, int(freq * rng.uniform(0.2, 2.0)))
+                for _ in range(count):
+                    dt = dt_base.replace(
+                        hour=_circadian_hour(rng),
+                        minute=rng.randint(0, 59),
+                        second=rng.randint(0, 59),
+                    )
+                    title = title_tmpl.format(
+                        sender=rng.choice(senders),
+                        contact=rng.choice(contacts),
+                        user=rng.choice(contacts),
+                        person=rng.choice(contacts),
+                        message="Hey! Are you free?",
+                        app=rng.choice(apps_to_update),
+                        amount=f"{rng.randint(5, 200)}.{rng.randint(0, 99):02d}",
+                        merchant=rng.choice(merchants),
+                        time=f"{rng.randint(15, 45)} min",
+                        subject=rng.choice(subjects),
+                    )
+                    body = body_tmpl.format(
+                        sender=rng.choice(senders),
+                        subject=rng.choice(subjects),
+                        amount=f"{rng.randint(5, 200)}.{rng.randint(0, 99):02d}",
+                        merchant=rng.choice(merchants),
+                        time=f"{rng.randint(15, 45)} min",
+                        app=rng.choice(apps_to_update),
+                    ) if body_tmpl else ""
+
+                    notifications.append({
+                        "package": pkg,
+                        "title": title,
+                        "body": body,
+                        "timestamp": int(dt.timestamp() * 1000),
+                        "seen": rng.random() < 0.8,
+                    })
+
+        notifications.sort(key=lambda x: x["timestamp"], reverse=True)
+        return notifications
+
+    # ─── EMAIL RECEIPTS ────────────────────────────────────────────────
+
+    def _forge_email_receipts(self, now: datetime, age_days: int,
+                              persona_email: str, locale: str) -> List[Dict]:
+        """Generate purchase confirmation email records for cross-validation."""
+        rng = self._rng
+        receipts = []
+
+        if locale == "US":
+            merchants = [
+                ("Amazon.com", "order@amazon.com", "Your Amazon.com order of {item}",
+                 ["Echo Dot", "USB-C Cable", "Phone Case", "Bluetooth Earbuds", "Kindle Book"]),
+                ("DoorDash", "no-reply@doordash.com", "Your DoorDash order receipt",
+                 ["Chipotle", "McDonald's", "Panda Express", "Subway", "Pizza Hut"]),
+                ("Uber", "uber.us@uber.com", "Your trip with Uber",
+                 ["Trip to Downtown", "Trip to Airport", "Trip to Home"]),
+                ("Google Play", "googleplay-noreply@google.com", "Your Google Play receipt",
+                 ["Spotify Premium", "YouTube Premium", "Google One", "In-app purchase"]),
+                ("Walmart", "help@walmart.com", "Your Walmart order confirmation",
+                 ["Groceries", "Electronics", "Household items"]),
+            ]
+        elif locale == "GB":
+            merchants = [
+                ("Amazon.co.uk", "order@amazon.co.uk", "Your Amazon.co.uk order of {item}",
+                 ["Phone Case", "USB Cable", "Kindle Book", "Echo Dot"]),
+                ("Deliveroo", "no-reply@deliveroo.co.uk", "Your Deliveroo receipt",
+                 ["Nando's", "Wagamama", "Domino's", "McDonald's"]),
+                ("Google Play", "googleplay-noreply@google.com", "Your Google Play receipt",
+                 ["Spotify Premium", "YouTube Premium"]),
+            ]
+        else:
+            merchants = [
+                ("Amazon", "order@amazon.com", "Your order of {item}",
+                 ["Phone Case", "USB Cable", "Book"]),
+                ("Google Play", "googleplay-noreply@google.com", "Your Google Play receipt",
+                 ["Spotify Premium", "YouTube Premium"]),
+            ]
+
+        # Generate 5-15 receipts spread over profile age
+        num_receipts = rng.randint(5, min(15, age_days // 5 + 3))
+        for _ in range(num_receipts):
+            merchant = rng.choice(merchants)
+            item = rng.choice(merchant[3])
+            dt = _random_datetime(rng, now, 1, min(age_days, 90))
+
+            if locale == "US":
+                amount = f"${rng.randint(5, 150)}.{rng.randint(0, 99):02d}"
+                currency = "USD"
+            elif locale == "GB":
+                amount = f"£{rng.randint(5, 100)}.{rng.randint(0, 99):02d}"
+                currency = "GBP"
+            else:
+                amount = f"€{rng.randint(5, 120)}.{rng.randint(0, 99):02d}"
+                currency = "EUR"
+
+            receipts.append({
+                "from": merchant[1],
+                "to": persona_email,
+                "merchant": merchant[0],
+                "subject": merchant[2].format(item=item),
+                "item": item,
+                "amount": amount,
+                "currency": currency,
+                "date": dt.isoformat(),
+                "timestamp": int(dt.timestamp() * 1000),
+                "order_id": f"#{rng.randint(100, 999)}-{rng.randint(1000000, 9999999)}",
+            })
+
+        receipts.sort(key=lambda x: x["timestamp"], reverse=True)
+        return receipts
 
     # ─── SAVE ─────────────────────────────────────────────────────────
 

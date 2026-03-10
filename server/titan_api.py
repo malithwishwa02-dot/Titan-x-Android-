@@ -299,6 +299,15 @@ class GenesisCreateBody(BaseModel):
     carrier: str = "tmobile_us"
     location: str = "nyc"
     device_model: str = "samsung_s25_ultra"
+    # Wallet / CC fields
+    cc_number: str = ""
+    cc_exp_month: int = 0
+    cc_exp_year: int = 0
+    cc_cvv: str = ""
+    cc_cardholder: str = ""
+    # Pre-login / trust options
+    install_wallets: bool = True
+    pre_login: bool = True
 
 @app.post("/api/genesis/create")
 async def genesis_create(body: GenesisCreateBody):
@@ -384,10 +393,18 @@ async def genesis_delete(profile_id: str):
 
 class GenesisInjectBody(BaseModel):
     profile_id: str = ""
+    # Optional CC data for wallet provisioning during injection
+    cc_number: str = ""
+    cc_exp_month: int = 0
+    cc_exp_year: int = 0
+    cc_cvv: str = ""
+    cc_cardholder: str = ""
 
 @app.post("/api/genesis/inject/{device_id}")
 async def genesis_inject(device_id: str, body: GenesisInjectBody):
-    """Inject forged profile into Android device via ADB — contacts, calls, SMS, cookies, history, gallery."""
+    """Inject forged profile into Android device via ADB.
+    Includes: contacts, calls, SMS, cookies, history, gallery,
+    Google account, wallet/CC, per-app data, Play Store purchases, trust score."""
     dev = dm.get_device(device_id)
     if not dev:
         raise HTTPException(404, "Device not found")
@@ -405,19 +422,258 @@ async def genesis_inject(device_id: str, body: GenesisInjectBody):
     if gallery_dir.exists():
         profile_data["gallery_paths"] = [str(p) for p in sorted(gallery_dir.glob("*.jpg"))[:25]]
 
+    # Build card_data dict if CC provided
+    card_data = None
+    if body.cc_number:
+        card_data = {
+            "number": body.cc_number,
+            "exp_month": body.cc_exp_month,
+            "exp_year": body.cc_exp_year,
+            "cvv": body.cc_cvv,
+            "cardholder": body.cc_cardholder or profile_data.get("persona_name", ""),
+        }
+
     # Inject via ADB
     try:
         injector = ProfileInjector(adb_target=dev.adb_target)
-        result = injector.inject_full_profile(profile_data)
+        result = injector.inject_full_profile(profile_data, card_data=card_data)
         return {
             "status": "injected",
             "device_id": device_id,
             "profile_id": body.profile_id,
+            "trust_score": result.trust_score,
             "result": result.to_dict(),
         }
     except Exception as e:
         logger.exception("Inject failed")
         raise HTTPException(500, str(e))
+
+
+@app.get("/api/genesis/trust-score/{device_id}")
+async def genesis_trust_score(device_id: str):
+    """Compute trust score for a device based on injected data presence."""
+    dev = dm.get_device(device_id)
+    if not dev:
+        raise HTTPException(404, "Device not found")
+
+    from device_manager import _adb_shell as dm_shell
+    t = dev.adb_target
+
+    checks = {}
+    score = 0
+
+    # 1. Google account present
+    acct = dm_shell(t, "content query --uri content://com.android.contacts/profile --projection display_name 2>/dev/null")
+    has_google = bool(dm_shell(t, "ls /data/system_ce/0/accounts_ce.db 2>/dev/null"))
+    checks["google_account"] = {"present": has_google, "weight": 15}
+    if has_google:
+        score += 15
+
+    # 2. Contacts populated
+    contacts_count = dm_shell(t, "content query --uri content://contacts/phones --projection _id | wc -l")
+    try:
+        contacts_n = int(contacts_count.strip()) if contacts_count.strip().isdigit() else 0
+    except ValueError:
+        contacts_n = 0
+    checks["contacts"] = {"count": contacts_n, "weight": 8}
+    if contacts_n >= 5:
+        score += 8
+
+    # 3. Chrome cookies exist
+    has_cookies = bool(dm_shell(t, "ls /data/data/com.android.chrome/app_chrome/Default/Cookies 2>/dev/null"))
+    checks["chrome_cookies"] = {"present": has_cookies, "weight": 8}
+    if has_cookies:
+        score += 8
+
+    # 4. Chrome history exists
+    has_history = bool(dm_shell(t, "ls /data/data/com.android.chrome/app_chrome/Default/History 2>/dev/null"))
+    checks["chrome_history"] = {"present": has_history, "weight": 8}
+    if has_history:
+        score += 8
+
+    # 5. Gallery has photos
+    gallery_count = dm_shell(t, "ls /sdcard/DCIM/Camera/*.jpg 2>/dev/null | wc -l")
+    try:
+        gallery_n = int(gallery_count.strip()) if gallery_count.strip().isdigit() else 0
+    except ValueError:
+        gallery_n = 0
+    checks["gallery"] = {"count": gallery_n, "weight": 5}
+    if gallery_n >= 3:
+        score += 5
+
+    # 6. Google Pay wallet data
+    has_wallet = bool(dm_shell(t, "ls /data/data/com.google.android.apps.walletnfcrel/databases/tapandpay.db 2>/dev/null"))
+    checks["google_pay"] = {"present": has_wallet, "weight": 12}
+    if has_wallet:
+        score += 12
+
+    # 7. Play Store library
+    has_library = bool(dm_shell(t, "ls /data/data/com.android.vending/databases/library.db 2>/dev/null"))
+    checks["play_store_library"] = {"present": has_library, "weight": 8}
+    if has_library:
+        score += 8
+
+    # 8. WiFi networks saved
+    has_wifi = bool(dm_shell(t, "ls /data/misc/wifi/WifiConfigStore.xml 2>/dev/null"))
+    checks["wifi_networks"] = {"present": has_wifi, "weight": 4}
+    if has_wifi:
+        score += 4
+
+    # 9. SMS present
+    sms_count = dm_shell(t, "content query --uri content://sms --projection _id | wc -l")
+    try:
+        sms_n = int(sms_count.strip()) if sms_count.strip().isdigit() else 0
+    except ValueError:
+        sms_n = 0
+    checks["sms"] = {"count": sms_n, "weight": 7}
+    if sms_n >= 5:
+        score += 7
+
+    # 10. Call logs present
+    calls_count = dm_shell(t, "content query --uri content://call_log/calls --projection _id | wc -l")
+    try:
+        calls_n = int(calls_count.strip()) if calls_count.strip().isdigit() else 0
+    except ValueError:
+        calls_n = 0
+    checks["call_logs"] = {"count": calls_n, "weight": 7}
+    if calls_n >= 10:
+        score += 7
+
+    # 11. App SharedPrefs populated
+    has_app_prefs = bool(dm_shell(t, "ls /data/data/com.instagram.android/shared_prefs/ 2>/dev/null"))
+    checks["app_data"] = {"present": has_app_prefs, "weight": 8}
+    if has_app_prefs:
+        score += 8
+
+    # 12. Chrome signed in
+    has_chrome_prefs = bool(dm_shell(t, "ls /data/data/com.android.chrome/app_chrome/Default/Preferences 2>/dev/null"))
+    checks["chrome_signin"] = {"present": has_chrome_prefs, "weight": 5}
+    if has_chrome_prefs:
+        score += 5
+
+    # 13. Autofill data
+    has_autofill = bool(dm_shell(t, "ls '/data/data/com.android.chrome/app_chrome/Default/Web Data' 2>/dev/null"))
+    checks["autofill"] = {"present": has_autofill, "weight": 5}
+    if has_autofill:
+        score += 5
+
+    return {
+        "device_id": device_id,
+        "trust_score": score,
+        "max_score": 100,
+        "grade": "A+" if score >= 90 else "A" if score >= 80 else "B" if score >= 65 else "C" if score >= 50 else "D" if score >= 30 else "F",
+        "checks": checks,
+    }
+
+
+# ─── SMARTFORGE ENDPOINTS ──────────────────────────────────────────
+
+from smartforge_bridge import smartforge_for_android, get_occupations, get_countries
+
+class SmartForgeBody(BaseModel):
+    occupation: str = "software_engineer"
+    country: str = "US"
+    age: int = 30
+    gender: str = "auto"
+    target_site: str = "amazon.com"
+    use_ai: bool = False
+    age_days: int = 0
+    # Identity override (optional — real data)
+    name: str = ""
+    email: str = ""
+    phone: str = ""
+    dob: str = ""
+    street: str = ""
+    city: str = ""
+    state: str = ""
+    zip: str = ""
+    card_number: str = ""
+    card_exp: str = ""
+    card_cvv: str = ""
+
+@app.post("/api/genesis/smartforge")
+async def genesis_smartforge(body: SmartForgeBody):
+    """AI-powered SmartForge: generate a full persona + forge + ready-to-inject profile.
+    Combines v11-release SmartForge engine with Android genesis pipeline."""
+    try:
+        # Build identity override dict from provided fields
+        override = {}
+        for field in ["name", "email", "phone", "dob", "street", "city",
+                      "state", "zip", "card_number", "card_exp", "card_cvv"]:
+            val = getattr(body, field, "")
+            if val:
+                override[field] = val
+
+        # Generate SmartForge profile adapted for Android
+        android_config = smartforge_for_android(
+            occupation=body.occupation,
+            country=body.country,
+            age=body.age,
+            gender=body.gender,
+            target_site=body.target_site,
+            use_ai=body.use_ai,
+            identity_override=override if override else None,
+            age_days=body.age_days,
+        )
+
+        # Forge the Android profile using the SmartForge config
+        profile = _forge.forge(
+            persona_name=android_config["persona_name"],
+            persona_email=android_config["persona_email"],
+            persona_phone=android_config["persona_phone"],
+            country=android_config["country"],
+            archetype=android_config["archetype"],
+            age_days=android_config["age_days"],
+            carrier=android_config["carrier"],
+            location=android_config["location"],
+            device_model=android_config["device_model"],
+        )
+
+        # Attach SmartForge metadata to profile for injection enrichment
+        profile["smartforge_config"] = android_config.get("smartforge_config", {})
+        profile["browsing_sites"] = android_config.get("browsing_sites", [])
+        profile["cookie_sites"] = android_config.get("cookie_sites", [])
+        profile["purchase_categories"] = android_config.get("purchase_categories", [])
+        profile["social_platforms"] = android_config.get("social_platforms", [])
+
+        return {
+            "profile_id": profile["id"],
+            "stats": profile["stats"],
+            "persona": {
+                "name": android_config["persona_name"],
+                "email": android_config["persona_email"],
+                "phone": android_config["persona_phone"],
+                "occupation": android_config["occupation"],
+                "age": android_config["age"],
+                "country": android_config["country"],
+                "device_model": android_config["device_model"],
+            },
+            "smartforge": {
+                "ai_enriched": android_config.get("ai_enriched", False),
+                "osint_enriched": android_config.get("osint_enriched", False),
+                "age_days": android_config["age_days"],
+                "has_card": android_config.get("card_data") is not None,
+                "carrier": android_config["carrier"],
+                "locale": android_config.get("locale", ""),
+                "timezone": android_config.get("timezone", ""),
+            },
+            "card_data": android_config.get("card_data"),
+        }
+    except Exception as e:
+        logger.exception("SmartForge failed")
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/genesis/occupations")
+async def genesis_occupations():
+    """List available occupation archetypes for SmartForge."""
+    return {"occupations": get_occupations()}
+
+
+@app.get("/api/genesis/countries")
+async def genesis_countries():
+    """List available countries for SmartForge."""
+    return {"countries": get_countries()}
 
 
 # ═══════════════════════════════════════════════════════════════════════

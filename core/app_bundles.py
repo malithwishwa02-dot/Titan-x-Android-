@@ -94,13 +94,60 @@ APP_BUNDLES = {
             {"pkg": "com.grubhub.android", "name": "Grubhub"},
         ],
     },
+    "wallets": {
+        "name": "Payment Wallets", "country": "ALL",
+        "apps": [
+            {"pkg": "com.google.android.apps.walletnfcrel", "name": "Google Pay / Wallet",
+             "has_payment": True, "login_required": True, "data_priority": "high"},
+            {"pkg": "com.samsung.android.spay", "name": "Samsung Pay",
+             "has_payment": True, "login_required": True, "data_priority": "high"},
+            {"pkg": "com.paypal.android.p2pmobile", "name": "PayPal",
+             "has_payment": True, "login_required": True, "data_priority": "high"},
+            {"pkg": "com.venmo", "name": "Venmo",
+             "has_payment": True, "login_required": True, "data_priority": "medium"},
+            {"pkg": "com.squareup.cash", "name": "Cash App",
+             "has_payment": True, "login_required": True, "data_priority": "medium"},
+        ],
+    },
+    "browsers": {
+        "name": "Web Browsers", "country": "ALL",
+        "apps": [
+            {"pkg": "com.android.chrome", "name": "Google Chrome"},
+            {"pkg": "org.mozilla.firefox", "name": "Firefox"},
+            {"pkg": "com.sec.android.app.sbrowser", "name": "Samsung Internet"},
+            {"pkg": "com.brave.browser", "name": "Brave"},
+            {"pkg": "com.duckduckgo.mobile.android", "name": "DuckDuckGo"},
+        ],
+    },
+    "google_essential": {
+        "name": "Google Essentials", "country": "ALL",
+        "apps": [
+            {"pkg": "com.google.android.youtube", "name": "YouTube"},
+            {"pkg": "com.google.android.gm", "name": "Gmail"},
+            {"pkg": "com.google.android.apps.maps", "name": "Google Maps"},
+            {"pkg": "com.google.android.apps.docs", "name": "Google Drive"},
+            {"pkg": "com.google.android.apps.photos", "name": "Google Photos"},
+            {"pkg": "com.google.android.keep", "name": "Google Keep"},
+            {"pkg": "com.google.android.calendar", "name": "Google Calendar"},
+        ],
+    },
+    "shopping": {
+        "name": "Shopping & E-Commerce", "country": "US",
+        "apps": [
+            {"pkg": "com.amazon.mShop.android.shopping", "name": "Amazon"},
+            {"pkg": "com.ebay.mobile", "name": "eBay"},
+            {"pkg": "com.walmart.android", "name": "Walmart"},
+            {"pkg": "com.target.ui", "name": "Target"},
+            {"pkg": "com.bestbuy.android", "name": "Best Buy"},
+        ],
+    },
 }
 
 COUNTRY_BUNDLES = {
-    "US": ["us_banking", "us_bnpl", "social", "delivery"],
-    "GB": ["uk_banking", "social"],
-    "DE": ["eu_banking", "social"],
-    "FR": ["eu_banking", "social"],
+    "US": ["us_banking", "us_bnpl", "wallets", "social", "delivery", "shopping", "browsers", "google_essential"],
+    "GB": ["uk_banking", "wallets", "social", "browsers", "google_essential"],
+    "DE": ["eu_banking", "wallets", "social", "browsers", "google_essential"],
+    "FR": ["eu_banking", "wallets", "social", "browsers", "google_essential"],
 }
 
 GMS_COMPONENTS = [

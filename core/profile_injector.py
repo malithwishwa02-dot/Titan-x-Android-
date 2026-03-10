@@ -49,13 +49,22 @@ def _adb(target: str, cmd: str, timeout: int = 15) -> Tuple[bool, str]:
 
 
 def _adb_push(target: str, local: str, remote: str) -> bool:
-    ok, _ = _adb(target, f"push {local} {remote}", timeout=30)
+    ok, _ = _adb(target, f"push {local} '{remote}'", timeout=30)
     return ok
 
 
 def _adb_shell(target: str, cmd: str) -> str:
     ok, out = _adb(target, f'shell "{cmd}"')
     return out if ok else ""
+
+
+def _ensure_adb_root(target: str):
+    """Ensure ADB is running as root for push operations."""
+    ok, out = _adb(target, "root", timeout=10)
+    if ok or "already running as root" in out.lower():
+        import time; time.sleep(1)
+        return True
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -74,6 +83,12 @@ class InjectionResult:
     sms_injected: int = 0
     photos_injected: int = 0
     autofill_injected: int = 0
+    google_account_ok: bool = False
+    wallet_ok: bool = False
+    app_data_ok: bool = False
+    play_purchases_ok: bool = False
+    app_usage_ok: bool = False
+    trust_score: int = 0
     errors: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -89,6 +104,12 @@ class InjectionResult:
             "contacts": self.contacts_injected, "call_logs": self.call_logs_injected,
             "sms": self.sms_injected, "photos": self.photos_injected,
             "autofill": self.autofill_injected,
+            "google_account": self.google_account_ok,
+            "wallet": self.wallet_ok,
+            "app_data": self.app_data_ok,
+            "play_purchases": self.play_purchases_ok,
+            "app_usage": self.app_usage_ok,
+            "trust_score": self.trust_score,
         }
 
 
@@ -105,19 +126,31 @@ class ProfileInjector:
         self.target = adb_target
         self.result = InjectionResult()
 
-    def inject_full_profile(self, profile: Dict[str, Any]) -> InjectionResult:
-        """Inject all profile data into the device."""
+    def inject_full_profile(self, profile: Dict[str, Any],
+                             card_data: Optional[Dict] = None,
+                             ) -> InjectionResult:
+        """Inject all profile data into the device.
+
+        Args:
+            profile: Full profile dict from AndroidProfileForge
+            card_data: Optional CC data dict with keys:
+                       number, exp_month, exp_year, cardholder, cvv
+        """
         self.result = InjectionResult(
             device_id=self.target,
             profile_id=profile.get("uuid", profile.get("id", "unknown")),
         )
 
+        _ensure_adb_root(self.target)
         logger.info(f"Injecting profile {self.result.profile_id} → {self.target}")
 
-        # Stop Chrome first to avoid DB lock
-        _adb_shell(self.target, "am force-stop com.android.chrome")
+        # Stop Chrome and other Google apps to avoid DB locks
+        for pkg in ["com.android.chrome", "com.google.android.gms",
+                    "com.android.vending", "com.google.android.apps.walletnfcrel"]:
+            _adb_shell(self.target, f"am force-stop {pkg}")
         time.sleep(1)
 
+        # ── Phase 1: Original injection targets ──
         self._inject_cookies(profile.get("cookies", []))
         self._inject_history(profile.get("history", []))
         self._inject_localstorage(profile.get("local_storage", {}))
@@ -127,8 +160,245 @@ class ProfileInjector:
         self._inject_gallery(profile.get("gallery_paths", []))
         self._inject_autofill(profile.get("autofill", {}))
 
+        # ── Phase 2: Google Account injection ──
+        self._inject_google_account(profile)
+
+        # ── Phase 3: Wallet / CC provisioning ──
+        if card_data:
+            self._inject_wallet(profile, card_data)
+
+        # ── Phase 4: Per-app data (SharedPrefs + DBs) ──
+        self._inject_app_data(profile)
+
+        # ── Phase 5: Play Store purchases ──
+        self._inject_play_purchases(profile)
+
+        # ── Phase 5.5: Purchase history (commerce cookies + history) ──
+        self._inject_purchase_history(profile)
+
+        # ── Phase 6: Compute trust score ──
+        self.result.trust_score = self._compute_trust_score(profile, card_data)
+
         logger.info(f"Injection complete: {self.result.to_dict()}")
         return self.result
+
+    # ─── GOOGLE ACCOUNT ────────────────────────────────────────────────
+
+    def _inject_google_account(self, profile: Dict[str, Any]):
+        """Inject Google account for pre-logged-in state across all Google apps."""
+        email = profile.get("persona_email", "")
+        name = profile.get("persona_name", "")
+        if not email:
+            return
+
+        try:
+            from google_account_injector import GoogleAccountInjector
+            injector = GoogleAccountInjector(adb_target=self.target)
+            acct_result = injector.inject_account(
+                email=email,
+                display_name=name,
+            )
+            self.result.google_account_ok = acct_result.success_count >= 5
+            if acct_result.errors:
+                self.result.errors.extend(
+                    [f"google_account: {e}" for e in acct_result.errors[:3]]
+                )
+            logger.info(f"  Google account: {acct_result.success_count}/8 targets")
+        except ImportError:
+            self.result.errors.append("google_account_injector module not found")
+        except Exception as e:
+            self.result.errors.append(f"google_account: {e}")
+
+    # ─── WALLET / CC ───────────────────────────────────────────────────
+
+    def _inject_wallet(self, profile: Dict[str, Any], card_data: Dict):
+        """Provision CC into Google Pay, Play Store billing, and Chrome autofill."""
+        try:
+            from wallet_provisioner import WalletProvisioner
+            prov = WalletProvisioner(adb_target=self.target)
+            wallet_result = prov.provision_card(
+                card_number=card_data.get("number", ""),
+                exp_month=int(card_data.get("exp_month", 12)),
+                exp_year=int(card_data.get("exp_year", 2027)),
+                cardholder=card_data.get("cardholder", profile.get("persona_name", "")),
+                cvv=card_data.get("cvv", ""),
+                persona_email=profile.get("persona_email", ""),
+                persona_name=profile.get("persona_name", ""),
+            )
+            self.result.wallet_ok = wallet_result.success_count >= 2
+            if wallet_result.errors:
+                self.result.errors.extend(
+                    [f"wallet: {e}" for e in wallet_result.errors[:3]]
+                )
+            logger.info(f"  Wallet: {wallet_result.success_count}/3 targets")
+        except ImportError:
+            self.result.errors.append("wallet_provisioner module not found")
+        except Exception as e:
+            self.result.errors.append(f"wallet: {e}")
+
+    # ─── APP DATA (SharedPrefs + DBs) ──────────────────────────────────
+
+    def _inject_app_data(self, profile: Dict[str, Any]):
+        """Forge and inject per-app SharedPreferences and databases."""
+        try:
+            from app_data_forger import AppDataForger
+
+            # Collect installed package names from app_installs
+            installed = [ai["package"] for ai in profile.get("app_installs", [])
+                         if "package" in ai]
+
+            if not installed:
+                return
+
+            persona = {
+                "email": profile.get("persona_email", ""),
+                "name": profile.get("persona_name", ""),
+                "phone": profile.get("persona_phone", ""),
+                "country": profile.get("country", "US"),
+            }
+
+            forger = AppDataForger(adb_target=self.target)
+            forge_result = forger.forge_and_inject(
+                installed_packages=installed,
+                persona=persona,
+                play_purchases=profile.get("play_purchases", []),
+                app_installs=profile.get("app_installs", []),
+            )
+            self.result.app_data_ok = forge_result.apps_processed > 0
+            self.result.play_purchases_ok = forge_result.play_library_ok
+            if forge_result.errors:
+                self.result.errors.extend(
+                    [f"app_data: {e}" for e in forge_result.errors[:5]]
+                )
+            logger.info(f"  App data: {forge_result.apps_processed} apps, "
+                        f"{forge_result.shared_prefs_written} prefs, "
+                        f"{forge_result.databases_written} DBs")
+        except ImportError:
+            self.result.errors.append("app_data_forger module not found")
+        except Exception as e:
+            self.result.errors.append(f"app_data: {e}")
+
+    # ─── PLAY PURCHASES ────────────────────────────────────────────────
+
+    def _inject_play_purchases(self, profile: Dict[str, Any]):
+        """Play Store purchases are injected via AppDataForger's library.db.
+        This method handles the app_usage injection via usagestats."""
+        app_usage = profile.get("app_usage", [])
+        if not app_usage:
+            return
+
+        try:
+            # Write usage stats as a JSON file that can be consumed by
+            # Android's UsageStatsService (simplified approach)
+            import tempfile
+            usage_json = json.dumps(app_usage, indent=2, default=str)
+
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as tmp:
+                tmp.write(usage_json)
+                tmp_path = tmp.name
+
+            remote_dir = "/data/system/usagestats/0/daily"
+            _adb_shell(self.target, f"mkdir -p {remote_dir}")
+
+            if _adb_push(self.target, tmp_path, f"{remote_dir}/titan_usage.json"):
+                self.result.app_usage_ok = True
+                logger.info(f"  App usage: {len(app_usage)} app records")
+
+            os.unlink(tmp_path)
+
+        except Exception as e:
+            self.result.errors.append(f"app_usage: {e}")
+
+    # ─── PURCHASE HISTORY (commerce cookies + browsing) ────────────────
+
+    def _inject_purchase_history(self, profile: Dict[str, Any]):
+        """Inject commerce purchase history via the purchase_history_bridge.
+        Adds: Chrome commerce cookies, purchase confirmation URLs to history,
+        and order notification entries."""
+        try:
+            from purchase_history_bridge import generate_android_purchase_history
+
+            # Get smartforge config if available (has purchase_categories)
+            sf_config = profile.get("smartforge_config", {})
+            purchase_cats = sf_config.get("purchase_categories",
+                                          profile.get("purchase_categories", []))
+
+            card_last4 = ""
+            card_network = "visa"
+            if sf_config.get("card_last4"):
+                card_last4 = sf_config["card_last4"]
+                card_network = sf_config.get("card_network", "visa")
+
+            ph = generate_android_purchase_history(
+                persona_name=profile.get("persona_name", ""),
+                persona_email=profile.get("persona_email", ""),
+                country=profile.get("country", "US"),
+                age_days=profile.get("age_days", 90),
+                card_last4=card_last4,
+                card_network=card_network,
+                purchase_categories=purchase_cats if purchase_cats else None,
+            )
+
+            # Inject commerce cookies into Chrome (append to existing)
+            commerce_cookies = ph.get("chrome_cookies", [])
+            if commerce_cookies:
+                self._inject_cookies(commerce_cookies)
+                logger.info(f"  Purchase history: {len(commerce_cookies)} commerce cookies")
+
+            # Inject purchase confirmation URLs into Chrome history
+            commerce_history = ph.get("chrome_history", [])
+            if commerce_history:
+                self._inject_history(commerce_history)
+                logger.info(f"  Purchase history: {len(commerce_history)} history entries")
+
+            summary = ph.get("purchase_summary", {})
+            logger.info(f"  Purchase history: {summary.get('total_purchases', 0)} orders, "
+                        f"${summary.get('total_spent', 0):.2f} total, "
+                        f"{summary.get('unique_merchants', 0)} merchants")
+
+        except ImportError:
+            logger.debug("purchase_history_bridge not available — skipping")
+        except Exception as e:
+            self.result.errors.append(f"purchase_history: {e}")
+
+    # ─── TRUST SCORE ───────────────────────────────────────────────────
+
+    def _compute_trust_score(self, profile: Dict[str, Any],
+                             card_data: Optional[Dict] = None) -> int:
+        """Compute a 0-100 trust score based on injected data completeness."""
+        score = 0
+        max_score = 100
+
+        # Category weights (total = 100)
+        checks = [
+            ("contacts", len(profile.get("contacts", [])) >= 5, 8),
+            ("call_logs", len(profile.get("call_logs", [])) >= 10, 7),
+            ("sms", len(profile.get("sms", [])) >= 5, 7),
+            ("cookies", self.result.cookies_injected >= 10, 8),
+            ("history", self.result.history_injected >= 20, 8),
+            ("gallery", self.result.photos_injected >= 5, 5),
+            ("wifi", len(profile.get("wifi_networks", [])) >= 2, 4),
+            ("autofill", bool(profile.get("autofill", {}).get("name")), 5),
+            ("google_account", self.result.google_account_ok, 15),
+            ("wallet", self.result.wallet_ok, 12),
+            ("app_data", self.result.app_data_ok, 8),
+            ("play_purchases", self.result.play_purchases_ok, 8),
+            ("app_usage", self.result.app_usage_ok, 5),
+        ]
+
+        details = []
+        for name, passed, weight in checks:
+            if passed:
+                score += weight
+                details.append(f"    ✓ {name}: +{weight}")
+            else:
+                details.append(f"    ✗ {name}: 0/{weight}")
+
+        logger.info(f"  Trust score: {score}/{max_score}")
+        for d in details:
+            logger.info(d)
+
+        return score
 
     # ─── COOKIES ──────────────────────────────────────────────────────
 
