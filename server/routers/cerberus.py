@@ -29,9 +29,11 @@ async def cerberus_validate(request: Request):
     engine = _get_engine()
     if engine:
         try:
-            import dataclasses, json, asyncio, inspect
+            import dataclasses, json, inspect
             card_input = body.get("card_input", body.get("number", ""))
-            result = engine.validate(card_input)
+            # Parse card string into CardAsset first
+            parsed = engine.parse_card_input(card_input)
+            result = engine.validate(parsed)
             # Await if coroutine
             if inspect.isawaitable(result):
                 result = await result
