@@ -29,7 +29,8 @@ async def cerberus_validate(request: Request):
     engine = _get_engine()
     if engine:
         try:
-            result = engine.validate_card(body)
+            card_input = body.get("card_input", body.get("number", ""))
+            result = engine.validate(card_input)
             return result
         except Exception as e:
             return {"error": str(e), "status": "error"}
@@ -51,7 +52,7 @@ async def cerberus_batch(request: Request):
             if len(parts) >= 2: card_body["exp_month"] = parts[1]
             if len(parts) >= 3: card_body["exp_year"] = parts[2]
             if len(parts) >= 4: card_body["cvv"] = parts[3]
-            r = engine.validate_card(card_body)
+            r = engine.validate(card_str)
             results.append(r)
         except Exception as e:
             results.append({"card": card_str[:10] + "...", "error": str(e)})
