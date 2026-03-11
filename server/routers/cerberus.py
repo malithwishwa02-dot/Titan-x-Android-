@@ -15,8 +15,8 @@ def _get_engine():
     global _engine
     if _engine is None:
         try:
-            from cerberus_core import CerberusEngine
-            _engine = CerberusEngine()
+            from cerberus_core import CerberusValidator
+            _engine = CerberusValidator()
             logger.info("CerberusEngine loaded from v11-release")
         except ImportError as e:
             logger.warning(f"CerberusEngine not available: {e}")

@@ -64,16 +64,23 @@ async def kyc_status(device_id: str):
     if not dev:
         raise HTTPException(404, "Device not found")
     gpu_ready = False
+    cameras = []
+    try:
+        from kyc_core import KYCController
+        ctrl = KYCController()
+        cameras = ctrl.get_available_cameras()
+    except Exception:
+        pass
     try:
         from gpu_reenact_client import GPUReenactClient
         client = GPUReenactClient()
         gpu_ready = client.is_connected()
-    except ImportError:
+    except Exception:
         pass
     return {
         "device": device_id, "device_state": dev.state,
         "gpu_ready": gpu_ready, "face_loaded": False,
-        "deepfake_active": False,
+        "deepfake_active": False, "cameras": cameras,
     }
 
 
