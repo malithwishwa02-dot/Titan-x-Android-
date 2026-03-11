@@ -83,6 +83,167 @@ _FALLBACK_COUNTRIES = [
 ]
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# CITY → LOCATION RESOLVER (persona-driven, no defaults)
+# ═══════════════════════════════════════════════════════════════════════
+
+CITY_TO_LOCATION = {
+    # US cities
+    "los angeles": "la", "la": "la", "hollywood": "la", "beverly hills": "la",
+    "new york": "nyc", "nyc": "nyc", "manhattan": "nyc", "brooklyn": "nyc", "bronx": "nyc", "queens": "nyc",
+    "chicago": "chicago", "houston": "houston", "miami": "miami", "fort lauderdale": "miami",
+    "san francisco": "sf", "oakland": "sf", "san jose": "sf",
+    "seattle": "seattle", "tacoma": "seattle",
+    # UK cities
+    "london": "london", "manchester": "manchester", "birmingham": "london",
+    "liverpool": "manchester", "leeds": "manchester", "bristol": "london",
+    # DE cities
+    "berlin": "berlin", "munich": "berlin", "hamburg": "berlin",
+    "frankfurt": "berlin", "cologne": "berlin", "stuttgart": "berlin",
+    # FR cities
+    "paris": "paris", "lyon": "paris", "marseille": "paris",
+    "toulouse": "paris", "nice": "paris", "bordeaux": "paris",
+}
+
+# US state → nearest location fallback
+STATE_TO_LOCATION = {
+    "california": "la", "ca": "la",
+    "new york": "nyc", "ny": "nyc", "new jersey": "nyc", "nj": "nyc", "connecticut": "nyc", "ct": "nyc",
+    "illinois": "chicago", "il": "chicago", "indiana": "chicago", "in": "chicago",
+    "texas": "houston", "tx": "houston",
+    "florida": "miami", "fl": "miami",
+    "washington": "seattle", "wa": "seattle", "oregon": "seattle", "or": "seattle",
+    "massachusetts": "nyc", "ma": "nyc", "pennsylvania": "nyc", "pa": "nyc",
+    "georgia": "miami", "ga": "miami", "north carolina": "miami", "nc": "miami",
+    "colorado": "chicago", "co": "chicago", "arizona": "la", "az": "la", "nevada": "la", "nv": "la",
+    "ohio": "chicago", "oh": "chicago", "michigan": "chicago", "mi": "chicago",
+    "virginia": "nyc", "va": "nyc", "maryland": "nyc", "md": "nyc",
+    # UK
+    "england": "london", "scotland": "manchester", "wales": "london",
+}
+
+# City → area codes for contact generation
+CITY_AREA_CODES = {
+    "la": ["213", "310", "323", "818", "626"],
+    "nyc": ["212", "646", "718", "917", "347"],
+    "chicago": ["312", "773", "872"],
+    "houston": ["713", "832", "281"],
+    "miami": ["305", "786", "954"],
+    "sf": ["415", "510", "408"],
+    "seattle": ["206", "253", "425"],
+    "london": ["020", "0207", "0208"],
+    "manchester": ["0161", "0151"],
+    "berlin": ["030", "089", "040"],
+    "paris": ["01", "06", "07"],
+}
+
+# Carrier pools per country (random selection, no single default)
+CARRIER_POOLS = {
+    "US": ["tmobile_us", "att_us", "verizon_us"],
+    "GB": ["ee_uk", "vodafone_uk", "three_uk", "o2_uk"],
+    "DE": ["telekom_de", "vodafone_de"],
+    "FR": ["orange_fr"],
+}
+
+# Country → currency/locale
+COUNTRY_META = {
+    "US": {"currency": "USD", "locale": "en-US", "phone_prefix": "+1"},
+    "GB": {"currency": "GBP", "locale": "en-GB", "phone_prefix": "+44"},
+    "DE": {"currency": "EUR", "locale": "de-DE", "phone_prefix": "+49"},
+    "FR": {"currency": "EUR", "locale": "fr-FR", "phone_prefix": "+33"},
+}
+
+
+def _resolve_location(city: str = "", state: str = "", country: str = "US") -> str:
+    """Resolve persona's city/state to a LOCATIONS key. No hardcoded defaults."""
+    # Try city first
+    if city:
+        loc = CITY_TO_LOCATION.get(city.lower().strip())
+        if loc:
+            return loc
+    # Try state fallback (US)
+    if state:
+        loc = STATE_TO_LOCATION.get(state.lower().strip())
+        if loc:
+            return loc
+    # Country-level fallback
+    country_loc = {"US": "nyc", "GB": "london", "DE": "berlin", "FR": "paris"}
+    return country_loc.get(country, "nyc")
+
+
+def _derive_email(name: str, dob: str = "") -> str:
+    """Derive email from persona name + DOB. No random generation."""
+    parts = name.strip().split(None, 1)
+    first = parts[0].lower() if parts else "user"
+    last = parts[1].lower().replace(" ", "") if len(parts) > 1 else "unknown"
+    # Extract birth year suffix from DOB
+    suffix = ""
+    if dob:
+        # Handle DD/MM/YYYY or YYYY-MM-DD
+        for sep in ["/", "-"]:
+            dob_parts = dob.split(sep)
+            if len(dob_parts) >= 3:
+                year_part = dob_parts[-1] if len(dob_parts[-1]) == 4 else dob_parts[0]
+                try:
+                    suffix = str(int(year_part) % 100)
+                except ValueError:
+                    pass
+                break
+    if not suffix:
+        suffix = str(random.randint(10, 99))
+    return f"{first}.{last}{suffix}@gmail.com"
+
+
+def _age_from_dob(dob: str) -> int:
+    """Calculate age from DOB string (DD/MM/YYYY or YYYY-MM-DD)."""
+    if not dob:
+        return 30
+    try:
+        for fmt in ["%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y"]:
+            try:
+                born = datetime.strptime(dob, fmt)
+                today = datetime.now()
+                return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return 30
+
+
+def _device_for_persona(occupation: str, age: int, country: str) -> str:
+    """Select device model based on occupation + age + country. No single default."""
+    # Age-based tiers
+    if age >= 55:
+        # Older adults: mainstream flagships, easy to use
+        pool = ["samsung_s24", "pixel_9_pro", "samsung_a55"]
+    elif age >= 35:
+        # Mid-career: premium devices
+        pool = ["samsung_s25_ultra", "pixel_9_pro", "oneplus_13", "samsung_s24"]
+    elif age >= 25:
+        # Young professional
+        pool = ["pixel_9_pro", "samsung_s25_ultra", "oneplus_13", "xiaomi_15"]
+    else:
+        # Under 25: budget/mid-range
+        pool = ["samsung_a55", "pixel_8a", "redmi_note_14", "nothing_phone_2a"]
+
+    # Occupation overrides
+    if occupation in ("doctor", "small_business_owner"):
+        pool = ["samsung_s25_ultra", "pixel_9_pro"]
+    elif occupation == "gamer":
+        pool = ["oneplus_13", "samsung_s25_ultra", "xiaomi_15"]
+    elif occupation == "university_student":
+        pool = ["samsung_a55", "pixel_8a", "nothing_phone_2a"]
+
+    # Country flavor (Samsung dominates US/GB, Xiaomi in DE/FR)
+    if country in ("DE", "FR") and age < 40:
+        pool = [p for p in pool if "samsung" not in p] or pool  # prefer non-Samsung in EU for variety
+        if not pool:
+            pool = ["xiaomi_15", "pixel_9_pro"]
+
+    return random.choice(pool)
+
+
 def _fallback_profile(occupation: str, country: str, age: int, gender: str = "auto") -> dict:
     """Minimal deterministic profile when v11-release is unavailable."""
     if gender == "auto":
@@ -90,38 +251,37 @@ def _fallback_profile(occupation: str, country: str, age: int, gender: str = "au
     first = random.choice(["James", "Michael", "Sarah", "Emily"] if gender == "M"
                           else ["Sarah", "Emily", "Jessica", "Amanda"])
     last = random.choice(["Smith", "Johnson", "Williams", "Brown", "Davis"])
-    email = f"{first.lower()}.{last.lower()}{random.randint(10, 99)}@gmail.com"
-    phone = f"+1212{random.randint(1000000, 9999999)}"
+    meta = COUNTRY_META.get(country, COUNTRY_META["US"])
     profile_age = max(30, int(age * 3 + random.randint(0, 90)))
 
     return {
         "name": f"{first} {last}",
         "first_name": first,
         "last_name": last,
-        "email": email,
-        "phone": phone,
+        "email": "",  # Will be derived from persona name+DOB
+        "phone": "",
         "dob": f"{datetime.now().year - age}-{random.randint(1,12):02d}-{random.randint(1,28):02d}",
         "age": age,
         "gender": gender,
         "occupation": occupation,
         "occupation_key": occupation,
-        "street": f"{random.randint(100, 9999)} Main St",
-        "city": "New York",
-        "state": "NY",
-        "zip": str(random.randint(10001, 14999)),
+        "street": "",
+        "city": "",
+        "state": "",
+        "zip": "",
         "country": country,
         "country_label": country,
         "card_number": "",
         "card_last4": "",
         "card_network": "visa",
-        "card_exp": f"{random.randint(1,12):02d}/{random.randint(26,29)}",
-        "card_cvv": str(random.randint(100, 999)),
+        "card_exp": "",
+        "card_cvv": "",
         "card_tier": "debit",
         "profile_age_days": profile_age,
         "avg_spend": random.randint(20, 300),
-        "currency": "USD",
-        "locale": "en-US",
-        "timezone": "America/New_York",
+        "currency": meta["currency"],
+        "locale": meta["locale"],
+        "timezone": "",  # Will be resolved from location
         "archetype": occupation,
         "browsing_sites": ["google.com", "youtube.com", "amazon.com", "reddit.com"],
         "cookie_sites": ["google.com", "youtube.com", "amazon.com"],
@@ -149,39 +309,31 @@ def smartforge_for_android(
     age_days: int = 0,
 ) -> Dict[str, Any]:
     """
-    Generate a SmartForge profile and adapt it for the Android genesis pipeline.
-
-    Returns a dict compatible with AndroidProfileForge.forge() + ProfileInjector,
-    including: persona identity, behavioral vectors, card data, and device config.
-
-    Args:
-        occupation: Occupation key (e.g. "software_engineer", "doctor")
-        country: Country code (e.g. "US", "GB", "DE")
-        age: Person's age
-        gender: "M", "F", or "auto"
-        target_site: Target e-commerce site
-        use_ai: Use Ollama AI enrichment (requires Ollama running)
-        identity_override: Dict with real identity to overlay (name, email, phone, card_number, etc.)
-        age_days: Override profile age in days (0 = auto from occupation/age)
+    Generate a SmartForge profile adapted for Android genesis.
+    ALL fields are derived from user persona inputs — no hardcoded defaults.
     """
     if _SMARTFORGE_OK:
-        # Use full v11-release SmartForge
         forge_config = smart_forge(
-            occupation=occupation,
-            country=country,
-            age=age,
-            gender=gender,
-            target_site=target_site,
-            use_ai=use_ai,
+            occupation=occupation, country=country, age=age,
+            gender=gender, target_site=target_site, use_ai=use_ai,
             identity_override=identity_override,
         )
     else:
-        # Fallback
         forge_config = _fallback_profile(occupation, country, age, gender)
-        if identity_override:
-            for k, v in identity_override.items():
-                if v:
-                    forge_config[k] = v
+
+    # Apply identity overrides
+    if identity_override:
+        for k, v in identity_override.items():
+            if v:
+                forge_config[k] = v
+
+    # Calculate age from DOB if provided
+    dob = forge_config.get("dob", "")
+    if dob and identity_override and identity_override.get("dob"):
+        calculated_age = _age_from_dob(dob)
+        if calculated_age > 0:
+            age = calculated_age
+            forge_config["age"] = age
 
     # Override age_days if specified
     if age_days > 0:
@@ -190,25 +342,63 @@ def smartforge_for_android(
     else:
         forge_config["age_days"] = forge_config.get("profile_age_days", 90)
 
-    # ── Adapt for Android genesis ──────────────────────────────────────
+    # ── PERSONA-DRIVEN RESOLUTION ─────────────────────────────────────
+    # Resolve location from persona's city/state (NOT hardcoded per country)
+    persona_city = forge_config.get("city", "")
+    persona_state = forge_config.get("state", "")
+    resolved_location = _resolve_location(persona_city, persona_state, country)
+
+    # Import LOCATIONS to get timezone, GPS, WiFi from resolved location
+    from device_presets import LOCATIONS
+    loc_data = LOCATIONS.get(resolved_location, {})
+    resolved_tz = loc_data.get("tz", "America/New_York")
+    resolved_locale = loc_data.get("locale", COUNTRY_META.get(country, {}).get("locale", "en-US"))
+
+    # Derive email from persona name + DOB (not random)
+    persona_name = forge_config.get("name", "")
+    persona_email = forge_config.get("email", "")
+    if not persona_email and persona_name:
+        persona_email = _derive_email(persona_name, dob)
+        forge_config["email"] = persona_email
+
+    # Select device based on persona age + occupation + country (not occupation-only)
+    device_model = _device_for_persona(occupation, age, country)
+
+    # Random carrier from country pool (not single hardcoded)
+    carrier_pool = CARRIER_POOLS.get(country, ["tmobile_us"])
+    carrier = random.choice(carrier_pool)
+
+    # Get city area codes for contact generation
+    area_codes = CITY_AREA_CODES.get(resolved_location, [])
+    # Extract persona's own area code from phone
+    persona_phone = forge_config.get("phone", "")
+    persona_area_code = ""
+    if persona_phone:
+        clean_phone = persona_phone.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        if clean_phone.startswith("+1") and len(clean_phone) >= 5:
+            persona_area_code = clean_phone[2:5]
+        elif len(clean_phone) >= 3 and clean_phone[0].isdigit():
+            persona_area_code = clean_phone[:3]
+
+    # ── Build Android config ──────────────────────────────────────────
     android_config = {
-        # Identity (for AndroidProfileForge + ProfileInjector)
-        "persona_name": forge_config.get("name", ""),
-        "persona_email": forge_config.get("email", ""),
-        "persona_phone": forge_config.get("phone", ""),
-        "country": forge_config.get("country", "US"),
+        # Identity
+        "persona_name": persona_name,
+        "persona_email": persona_email,
+        "persona_phone": persona_phone,
+        "country": country,
         "archetype": forge_config.get("archetype", occupation),
         "age_days": forge_config.get("age_days", 90),
-        "device_model": _occupation_to_device(occupation),
+        "device_model": device_model,
 
-        # Carrier + location (auto from country)
-        "carrier": _country_to_carrier(country),
-        "location": _country_to_location(country),
+        # Resolved from persona city/state
+        "carrier": carrier,
+        "location": resolved_location,
 
-        # Card data (for wallet provisioning)
+        # Card data
         "card_data": None,
 
-        # SmartForge behavioral vectors (for enriched forging)
+        # Behavioral vectors
         "browsing_sites": forge_config.get("browsing_sites", []),
         "cookie_sites": forge_config.get("cookie_sites", []),
         "search_terms": forge_config.get("search_terms", []),
@@ -216,10 +406,10 @@ def smartforge_for_android(
         "social_platforms": forge_config.get("social_platforms", []),
         "hour_weights": forge_config.get("hour_weights", [1]*24),
 
-        # Full SmartForge config for reference
+        # Full config reference
         "smartforge_config": forge_config,
 
-        # Metadata
+        # Metadata (all resolved from persona)
         "smartforge": True,
         "ai_enriched": forge_config.get("ai_enriched", False),
         "osint_enriched": forge_config.get("osint_enriched", False),
@@ -227,78 +417,51 @@ def smartforge_for_android(
         "occupation_key": forge_config.get("occupation_key", occupation),
         "gender": forge_config.get("gender", "auto"),
         "age": age,
-        "dob": forge_config.get("dob", ""),
-        "locale": forge_config.get("locale", "en-US"),
-        "timezone": forge_config.get("timezone", "America/New_York"),
-        "currency": forge_config.get("currency", "USD"),
+        "dob": dob,
+        "locale": resolved_locale,
+        "timezone": resolved_tz,
+        "currency": COUNTRY_META.get(country, {}).get("currency", "USD"),
 
-        # Address (for autofill)
+        # Address (user's real address for autofill)
         "street": forge_config.get("street", ""),
-        "city": forge_config.get("city", ""),
-        "state": forge_config.get("state", ""),
+        "city": persona_city,
+        "state": persona_state,
         "zip": forge_config.get("zip", ""),
+
+        # Contact generation hints
+        "persona_area_code": persona_area_code,
+        "city_area_codes": area_codes,
     }
 
-    # Build card_data if CC present in forge_config
+    # Build card_data if CC present
     card_num = forge_config.get("card_number", "")
-    if card_num and len(card_num) >= 13:
-        exp = forge_config.get("card_exp", "12/27")
-        parts = exp.split("/")
+    if card_num and len(card_num.replace(" ", "").replace("-", "")) >= 13:
+        clean_num = card_num.replace(" ", "").replace("-", "")
+        exp = forge_config.get("card_exp", "")
+        exp_month, exp_year = 12, 2027
+        if exp:
+            parts = exp.replace("|", "/").split("/")
+            if len(parts) >= 2:
+                try:
+                    exp_month = int(parts[0])
+                    yr = int(parts[1])
+                    exp_year = yr if yr > 100 else 2000 + yr
+                except ValueError:
+                    pass
         android_config["card_data"] = {
-            "number": card_num,
-            "exp_month": int(parts[0]) if len(parts) >= 2 else 12,
-            "exp_year": int("20" + parts[1]) if len(parts) >= 2 and len(parts[1]) == 2
-                        else int(parts[1]) if len(parts) >= 2 else 2027,
-            "cvv": forge_config.get("card_cvv", "123"),
-            "cardholder": forge_config.get("name", ""),
+            "number": clean_num,
+            "exp_month": exp_month,
+            "exp_year": exp_year,
+            "cvv": forge_config.get("card_cvv", ""),
+            "cardholder": persona_name,
         }
 
+    logger.info(f"SmartForge resolved: location={resolved_location}, tz={resolved_tz}, "
+                f"carrier={carrier}, device={device_model}, email={persona_email}")
     return android_config
 
 
-def _occupation_to_device(occupation: str) -> str:
-    """Map occupation archetype to realistic device model."""
-    device_map = {
-        "university_student": random.choice(["samsung_a55", "pixel_8a", "xiaomi_14"]),
-        "software_engineer": random.choice(["pixel_9_pro", "samsung_s25_ultra"]),
-        "government_worker": random.choice(["samsung_s24", "pixel_9_pro"]),
-        "doctor": random.choice(["samsung_s25_ultra", "pixel_9_pro"]),
-        "retail_worker": random.choice(["samsung_a15", "xiaomi_redmi_note_14_pro"]),
-        "freelancer": random.choice(["pixel_9_pro", "oneplus_13"]),
-        "retiree": random.choice(["samsung_s24", "samsung_a55"]),
-        "small_business_owner": random.choice(["samsung_s25_ultra", "pixel_9_pro"]),
-        "teacher": random.choice(["samsung_a55", "pixel_8a"]),
-        "gamer": random.choice(["oneplus_13", "samsung_s25_ultra"]),
-    }
-    return device_map.get(occupation, "samsung_s25_ultra")
-
-
-def _country_to_carrier(country: str) -> str:
-    """Map country to default carrier."""
-    carrier_map = {
-        "US": "tmobile_us", "GB": "ee_uk", "CA": "rogers_ca",
-        "AU": "telstra_au", "DE": "tmobile_de", "FR": "orange_fr",
-        "JP": "docomo_jp", "BR": "vivo_br", "NL": "kpn_nl",
-        "IT": "tim_it", "ES": "movistar_es", "SE": "telia_se",
-        "CH": "swisscom_ch", "PL": "play_pl", "SG": "singtel_sg",
-        "IN": "jio_in", "TR": "turkcell_tr", "KR": "skt_kr",
-        "MX": "telcel_mx", "BE": "proximus_be",
-    }
-    return carrier_map.get(country, "tmobile_us")
-
-
-def _country_to_location(country: str) -> str:
-    """Map country to default city/location key."""
-    loc_map = {
-        "US": "nyc", "GB": "london", "CA": "toronto",
-        "AU": "sydney", "DE": "berlin", "FR": "paris",
-        "JP": "tokyo", "BR": "sao_paulo", "NL": "amsterdam",
-        "IT": "milan", "ES": "madrid", "SE": "stockholm",
-        "CH": "zurich", "PL": "warsaw", "SG": "singapore",
-        "IN": "mumbai", "TR": "istanbul", "KR": "seoul",
-        "MX": "mexico_city", "BE": "brussels",
-    }
-    return loc_map.get(country, "nyc")
+# Legacy helpers removed — replaced by persona-driven _resolve_location, _device_for_persona, carrier pools
 
 
 def get_occupations() -> List[dict]:

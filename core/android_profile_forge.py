@@ -305,6 +305,9 @@ class AndroidProfileForge:
               carrier: str = "tmobile_us",
               location: str = "nyc",
               device_model: str = "samsung_s25_ultra",
+              persona_address: Optional[Dict[str, str]] = None,
+              persona_area_code: str = "",
+              city_area_codes: Optional[List[str]] = None,
               ) -> Dict[str, Any]:
         """
         Forge a complete Android device profile.
@@ -333,8 +336,13 @@ class AndroidProfileForge:
         locale = country.upper()[:2]
         name_pool = NAME_POOLS.get(locale, NAME_POOLS["US"])
 
-        # ─── Generate contacts ────────────────────────────────────────
-        contacts = self._forge_contacts(name_pool, locale, age_days)
+        # ─── Generate contacts (with persona area codes) ──────────────
+        extra_area_codes = []
+        if persona_area_code:
+            extra_area_codes.append(persona_area_code)
+        if city_area_codes:
+            extra_area_codes.extend(city_area_codes[:4])
+        contacts = self._forge_contacts(name_pool, locale, age_days, extra_area_codes=extra_area_codes)
 
         # ─── Generate call logs ───────────────────────────────────────
         call_logs = self._forge_call_logs(contacts, now, age_days)
@@ -351,14 +359,18 @@ class AndroidProfileForge:
         # ─── Generate gallery photos ──────────────────────────────────
         gallery_paths = self._forge_gallery(now, age_days)
 
-        # ─── Generate autofill ────────────────────────────────────────
+        # ─── Generate autofill (use persona's real address if provided) ─
+        if persona_address and persona_address.get("address"):
+            address = persona_address
+        else:
+            address = self._forge_address(locale)
         autofill = {
             "name": persona_name,
             "first_name": first_name,
             "last_name": last_name,
             "email": persona_email,
             "phone": persona_phone,
-            "address": self._forge_address(locale),
+            "address": address,
         }
 
         # ─── WiFi networks ───────────────────────────────────────────
@@ -436,11 +448,15 @@ class AndroidProfileForge:
 
     # ─── CONTACTS ─────────────────────────────────────────────────────
 
-    def _forge_contacts(self, name_pool: dict, locale: str, age_days: int) -> List[Dict]:
-        """Generate persona-consistent contacts."""
+    def _forge_contacts(self, name_pool: dict, locale: str, age_days: int,
+                         extra_area_codes: Optional[List[str]] = None) -> List[Dict]:
+        """Generate persona-consistent contacts with persona's area codes."""
         rng = self._rng
         num_contacts = rng.randint(10, 22)
         area_codes = name_pool.get("area_codes", ["212", "646", "718"])
+        # Mix in persona's area codes (from their phone + city)
+        if extra_area_codes:
+            area_codes = list(extra_area_codes) + [c for c in area_codes if c not in extra_area_codes]
         contacts = []
 
         # Mix of male and female names
@@ -488,7 +504,7 @@ class AndroidProfileForge:
         rng = self._rng
         # ~1.5 calls/day on average
         _lo = max(20, age_days)
-        _hi = max(_lo, min(age_days * 3, 200))
+        _hi = max(_lo, min(age_days * 3, 1500))
         num_calls = rng.randint(_lo, _hi)
         logs = []
 

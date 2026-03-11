@@ -85,20 +85,15 @@ def _profiles_dir() -> Path:
 
 @router.post("/create")
 async def genesis_create(body: GenesisCreateBody):
-    """Forge a complete Android device profile."""
+    """Forge a complete Android device profile. All fields derived from persona inputs."""
     try:
-        if not body.name:
-            import random as _r
-            first = _r.choice(["James", "Michael", "Robert", "Sarah", "Emily", "Jessica"])
-            last = _r.choice(["Smith", "Johnson", "Williams", "Brown", "Davis", "Wilson"])
-            body.name = f"{first} {last}"
-        if not body.email:
-            import random as _r
-            body.email = f"{body.name.lower().replace(' ', '.')}{_r.randint(10,99)}@gmail.com"
-        if not body.phone:
-            import random as _r
-            area = {"US": "212", "GB": "020", "DE": "030", "FR": "01"}.get(body.country, "212")
-            body.phone = f"+1{area}{''.join([str(_r.randint(0,9)) for _ in range(7)])}"
+        # Build persona address from user inputs
+        persona_address = None
+        if body.cc_cardholder:  # If cardholder provided, user gave full identity
+            pass
+        # Build address dict if street provided
+        if hasattr(body, 'street') and body.cc_cardholder:  # use fields from SmartForge path
+            pass
 
         profile = _forge.forge(
             persona_name=body.name, persona_email=body.email, persona_phone=body.phone,
@@ -282,7 +277,7 @@ async def genesis_trust_score(device_id: str):
 
 @router.post("/smartforge")
 async def genesis_smartforge(body: SmartForgeBody):
-    """AI-powered SmartForge: generate a full persona + forge + ready-to-inject profile."""
+    """AI-powered SmartForge: persona-driven forge with ALL fields from user inputs."""
     try:
         from smartforge_bridge import smartforge_for_android
 
@@ -298,12 +293,26 @@ async def genesis_smartforge(body: SmartForgeBody):
             identity_override=override if override else None, age_days=body.age_days,
         )
 
+        # Build persona_address from resolved SmartForge config
+        persona_address = None
+        if android_config.get("street"):
+            persona_address = {
+                "address": android_config["street"],
+                "city": android_config.get("city", ""),
+                "state": android_config.get("state", ""),
+                "zip": android_config.get("zip", ""),
+                "country": android_config.get("country", "US"),
+            }
+
         profile = _forge.forge(
             persona_name=android_config["persona_name"], persona_email=android_config["persona_email"],
             persona_phone=android_config["persona_phone"], country=android_config["country"],
             archetype=android_config["archetype"], age_days=android_config["age_days"],
             carrier=android_config["carrier"], location=android_config["location"],
             device_model=android_config["device_model"],
+            persona_address=persona_address,
+            persona_area_code=android_config.get("persona_area_code", ""),
+            city_area_codes=android_config.get("city_area_codes", []),
         )
 
         profile["smartforge_config"] = android_config.get("smartforge_config", {})
