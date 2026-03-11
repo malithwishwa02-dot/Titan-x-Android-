@@ -31,12 +31,15 @@ async def cerberus_validate(request: Request):
         try:
             card_input = body.get("card_input", body.get("number", ""))
             result = engine.validate(card_input)
-            # Convert dataclass/object to dict if needed
-            if hasattr(result, '__dict__') and not isinstance(result, dict):
-                return result.__dict__
+            # Convert dataclass result to JSON-safe dict
+            import dataclasses, json
+            if dataclasses.is_dataclass(result):
+                return json.loads(json.dumps(dataclasses.asdict(result), default=str))
             if hasattr(result, 'to_dict'):
                 return result.to_dict()
-            return result
+            if hasattr(result, '__dict__'):
+                return json.loads(json.dumps(result.__dict__, default=str))
+            return {"raw": str(result)}
         except Exception as e:
             logger.exception("Cerberus validate error")
             return {"error": str(e), "status": "error"}
