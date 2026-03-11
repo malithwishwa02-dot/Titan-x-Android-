@@ -29,14 +29,19 @@ async def cerberus_validate(request: Request):
     engine = _get_engine()
     if engine:
         try:
+            import dataclasses, json, asyncio, inspect
             card_input = body.get("card_input", body.get("number", ""))
             result = engine.validate(card_input)
+            # Await if coroutine
+            if inspect.isawaitable(result):
+                result = await result
             # Convert dataclass result to JSON-safe dict
-            import dataclasses, json
             if dataclasses.is_dataclass(result):
                 return json.loads(json.dumps(dataclasses.asdict(result), default=str))
             if hasattr(result, 'to_dict'):
                 return result.to_dict()
+            if isinstance(result, dict):
+                return result
             if hasattr(result, '__dict__'):
                 return json.loads(json.dumps(result.__dict__, default=str))
             return {"raw": str(result)}
