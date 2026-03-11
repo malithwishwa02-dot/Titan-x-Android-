@@ -145,9 +145,33 @@ async def genesis_delete(profile_id: str):
     return {"deleted": profile_id}
 
 
+import threading
+import time as _time
+import uuid as _uuid
+
+_inject_jobs: Dict[str, dict] = {}
+
+
+def _run_inject_job(job_id: str, adb_target: str, profile_data: dict,
+                    card_data: dict, device_id: str, profile_id: str):
+    """Background worker for profile injection."""
+    job = _inject_jobs[job_id]
+    try:
+        injector = ProfileInjector(adb_target=adb_target)
+        result = injector.inject_full_profile(profile_data, card_data=card_data)
+        job.update({
+            "status": "completed", "trust_score": result.trust_score,
+            "result": result.to_dict(), "completed_at": _time.time(),
+        })
+        logger.info(f"Inject job {job_id} completed: trust={result.trust_score}")
+    except Exception as e:
+        job.update({"status": "failed", "error": str(e), "completed_at": _time.time()})
+        logger.exception(f"Inject job {job_id} failed")
+
+
 @router.post("/inject/{device_id}")
 async def genesis_inject(device_id: str, body: GenesisInjectBody):
-    """Inject forged profile into Android device via ADB."""
+    """Inject forged profile into Android device via ADB (runs in background)."""
     dev = dm.get_device(device_id)
     if not dev:
         raise HTTPException(404, "Device not found")
@@ -170,17 +194,33 @@ async def genesis_inject(device_id: str, body: GenesisInjectBody):
             "cardholder": body.cc_cardholder or profile_data.get("persona_name", ""),
         }
 
-    try:
-        injector = ProfileInjector(adb_target=dev.adb_target)
-        result = injector.inject_full_profile(profile_data, card_data=card_data)
-        return {
-            "status": "injected", "device_id": device_id,
-            "profile_id": body.profile_id, "trust_score": result.trust_score,
-            "result": result.to_dict(),
-        }
-    except Exception as e:
-        logger.exception("Inject failed")
-        raise HTTPException(500, str(e))
+    job_id = str(_uuid.uuid4())[:8]
+    _inject_jobs[job_id] = {
+        "status": "running", "device_id": device_id,
+        "profile_id": body.profile_id, "started_at": _time.time(),
+    }
+
+    t = threading.Thread(
+        target=_run_inject_job,
+        args=(job_id, dev.adb_target, profile_data, card_data, device_id, body.profile_id),
+        daemon=True,
+    )
+    t.start()
+
+    return {
+        "status": "inject_started", "job_id": job_id,
+        "device_id": device_id, "profile_id": body.profile_id,
+        "poll_url": f"/api/genesis/inject-status/{job_id}",
+    }
+
+
+@router.get("/inject-status/{job_id}")
+async def genesis_inject_status(job_id: str):
+    """Poll injection job status."""
+    job = _inject_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return job
 
 
 @router.get("/trust-score/{device_id}")

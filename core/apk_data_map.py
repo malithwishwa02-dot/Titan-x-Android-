@@ -112,9 +112,8 @@ APK_DATA_MAP: Dict[str, Dict[str, Any]] = {
                 "notify_updates": "true",
                 "last_notified_time": "{last_open_ts}",
             },
-            "com.android.vending.billing.InAppBillingService.COIN.xml": {
-                "billing_client_version": "6.1.0",
-            },
+            # NOTE: COIN.xml is written by wallet_provisioner with full
+            # payment method fields — do NOT overwrite here.
         },
         "databases": {
             "library.db": {

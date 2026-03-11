@@ -106,9 +106,31 @@ def detect_network(card_number: str) -> Dict[str, Any]:
 
 
 def detect_issuer(card_number: str) -> str:
-    """Detect card issuer from BIN prefix."""
-    num = card_number.replace(" ", "").replace("-", "")[:4]
-    return ISSUER_MAP.get(num, "Bank")
+    """Detect card issuer from BIN using full BINDatabase, fallback to legacy map."""
+    num = card_number.replace(" ", "").replace("-", "")
+    bin6 = num[:6]
+    try:
+        from bin_database import BINDatabase
+        rec = BINDatabase.get().lookup(bin6)
+        if rec:
+            return rec.bank
+    except Exception:
+        pass
+    return ISSUER_MAP.get(num[:4], "Bank")
+
+
+def detect_bin_info(card_number: str) -> Dict[str, Any]:
+    """Get full BIN info (bank, country, level, otp_risk, auth_rate) from BINDatabase."""
+    num = card_number.replace(" ", "").replace("-", "")
+    bin6 = num[:6]
+    try:
+        from bin_database import BINDatabase
+        rec = BINDatabase.get().lookup(bin6)
+        if rec:
+            return rec.to_dict()
+    except Exception:
+        pass
+    return {"bin": bin6, "bank": ISSUER_MAP.get(num[:4], "Bank"), "otp_risk": "medium"}
 
 
 def generate_dpan(card_number: str) -> str:
@@ -253,6 +275,11 @@ class WalletProvisioner:
             clean_num, last4, exp_month, exp_year, cardholder, network_info, result,
         )
 
+        # 4. Card-aware bank SMS notifications
+        self._inject_card_sms(
+            last4, issuer, network_info, result,
+        )
+
         logger.info(f"Wallet provisioning complete: {result.success_count}/3 targets")
         return result
 
@@ -310,6 +337,9 @@ class WalletProvisioner:
                 created_ms, last_used_ms,
             ))
 
+            # Compatibility view for apps checking token_metadata
+            c.execute("CREATE VIEW IF NOT EXISTS token_metadata AS SELECT * FROM tokens")
+
             conn.commit()
             conn.close()
 
@@ -352,6 +382,19 @@ class WalletProvisioner:
             self._push_shared_prefs_xml(
                 f"{self.WALLET_DATA}/shared_prefs/com.google.android.apps.walletnfcrel_preferences.xml",
                 app_prefs, "com.google.android.apps.walletnfcrel",
+            )
+
+            # nfc_on_prefs.xml — some apps check this instead of default_settings
+            nfc_prefs = {
+                "nfc_setup_done": "true",
+                "nfc_enabled": "true",
+                "tap_and_pay_enabled": "true",
+                "contactless_payments_enabled": "true",
+                "default_payment_app": "com.google.android.apps.walletnfcrel",
+            }
+            self._push_shared_prefs_xml(
+                f"{self.WALLET_DATA}/shared_prefs/nfc_on_prefs.xml",
+                nfc_prefs, "com.google.android.apps.walletnfcrel",
             )
 
             result.google_pay_ok = True
@@ -444,9 +487,24 @@ class WalletProvisioner:
             now_s = int(time.time())
             # Card added 7-30 days ago
             date_added = now_s - random.randint(7 * 86400, 30 * 86400)
-            # Used 3-8 times
-            use_count = random.randint(3, 8)
+            # Used 5-15 times for realistic history
+            use_count = random.randint(5, 15)
             last_used = now_s - random.randint(0, 3 * 86400)
+
+            # Realistic origin URLs from major merchants
+            AUTOFILL_ORIGINS = [
+                "https://pay.google.com",
+                "https://www.amazon.com",
+                "https://checkout.stripe.com",
+                "https://www.walmart.com",
+                "https://www.bestbuy.com",
+                "https://www.target.com",
+                "https://www.ebay.com",
+                "https://www.netflix.com",
+                "https://www.spotify.com",
+                "https://store.steampowered.com",
+            ]
+            origin = random.choice(AUTOFILL_ORIGINS)
 
             # Chrome encrypts card numbers; for local storage we store a hint
             # In practice, Chrome uses OS keystore — we store the encrypted blob
@@ -459,12 +517,51 @@ class WalletProvisioner:
                 (guid, name_on_card, expiration_month, expiration_year,
                  card_number_encrypted, date_modified, origin, use_count, use_date,
                  nickname)
-                VALUES (?, ?, ?, ?, ?, ?, 'https://pay.google.com', ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 card_guid, cardholder, exp_month, exp_year,
-                card_blob, date_added, use_count, last_used,
+                card_blob, date_added, origin, use_count, last_used,
                 f"{network_info['name']} ····{last4}",
             ))
+
+            # ── Autofill address profile ──
+            c.execute("""CREATE TABLE IF NOT EXISTS autofill_profile_names (
+                guid TEXT NOT NULL, first_name TEXT DEFAULT '',
+                middle_name TEXT DEFAULT '', last_name TEXT DEFAULT '',
+                full_name TEXT DEFAULT ''
+            )""")
+            c.execute("""CREATE TABLE IF NOT EXISTS autofill_profile_emails (
+                guid TEXT NOT NULL, email TEXT DEFAULT ''
+            )""")
+            c.execute("""CREATE TABLE IF NOT EXISTS autofill_profile_phones (
+                guid TEXT NOT NULL, number TEXT DEFAULT ''
+            )""")
+
+            profile_guid = str(uuid.uuid4())
+            prof_date = now_s - random.randint(14 * 86400, 60 * 86400)
+            prof_uses = random.randint(5, 20)
+            prof_last = now_s - random.randint(0, 5 * 86400)
+            parts = cardholder.split()
+            first = parts[0] if parts else cardholder
+            last = parts[-1] if len(parts) > 1 else ""
+
+            c.execute(
+                "INSERT OR IGNORE INTO autofill_profiles "
+                "(guid, street_address, city, state, zipcode, country_code, "
+                "date_modified, origin, language_code, use_count, use_date) "
+                "VALUES (?, '', '', '', '', 'US', ?, ?, 'en-US', ?, ?)",
+                (profile_guid, prof_date, origin, prof_uses, prof_last),
+            )
+            c.execute(
+                "INSERT OR IGNORE INTO autofill_profile_names "
+                "(guid, first_name, last_name, full_name) VALUES (?, ?, ?, ?)",
+                (profile_guid, first, last, cardholder),
+            )
+            if persona_email:
+                c.execute(
+                    "INSERT OR IGNORE INTO autofill_profile_emails (guid, email) VALUES (?, ?)",
+                    (profile_guid, persona_email),
+                )
 
             conn.commit()
             conn.close()
@@ -482,6 +579,85 @@ class WalletProvisioner:
         except Exception as e:
             result.errors.append(f"chrome_autofill: {e}")
             logger.error(f"Chrome autofill provisioning failed: {e}")
+
+    # ─── CARD-AWARE BANK SMS ──────────────────────────────────────────
+
+    def _inject_card_sms(self, last4: str, issuer: str,
+                          network_info: Dict, result: WalletProvisionResult):
+        """Inject realistic bank notification SMS for card transactions."""
+        try:
+            now_ms = int(time.time() * 1000)
+            network_name = network_info["name"]
+
+            SMS_TEMPLATES = [
+                "Your {issuer} {network} ending in {last4} was used for ${amount:.2f} at {merchant}. If not you, call {phone}.",
+                "{issuer} Alert: Transaction of ${amount:.2f} on card ending {last4} at {merchant} approved.",
+                "Purchase alert: ${amount:.2f} charged to your {network} ****{last4}. {merchant}. Avail bal: ${bal:.2f}",
+                "{issuer}: Your {network} card ending in {last4} has been added to Google Pay.",
+                "Alert: Your {issuer} card ****{last4} payment of ${amount:.2f} to {merchant} was successful.",
+                "{issuer}: A purchase of ${amount:.2f} was made with your card ending in {last4}. Reply STOP to opt out.",
+            ]
+
+            MERCHANTS = [
+                "AMAZON.COM", "WALMART.COM", "TARGET", "SPOTIFY USA",
+                "NETFLIX.COM", "UBER TRIP", "DOORDASH", "GOOGLE *SERVICES",
+                "APPLE.COM/BILL", "STEAM PURCHASE",
+            ]
+
+            BANK_PHONES = {
+                "Chase": "1-800-935-9935", "Bank of America": "1-800-432-1000",
+                "Capital One": "1-800-227-4825", "Citi": "1-800-950-5114",
+                "Wells Fargo": "1-800-869-3557", "US Bank": "1-800-872-2657",
+                "USAA": "1-800-531-8722", "Navy Federal": "1-888-842-6328",
+                "Barclays": "0345-734-5345", "HSBC": "0345-740-4404",
+                "Monzo": "0800-802-1281", "Revolut": "+44-20-3322-8352",
+            }
+
+            SENDER = {
+                "Chase": "33789", "Bank of America": "73981",
+                "Capital One": "227462", "Citi": "95686",
+                "Wells Fargo": "93557", "US Bank": "872265",
+                "USAA": "531872", "Navy Federal": "842632",
+                "Barclays": "BARCLAYS", "HSBC": "HSBC",
+                "Monzo": "MONZO", "Revolut": "REVOLUT",
+            }
+
+            phone = BANK_PHONES.get(issuer, "1-800-000-0000")
+            sender = SENDER.get(issuer, "72000")
+            num_sms = random.randint(3, 8)
+
+            for i in range(num_sms):
+                age_days = random.randint(1, 28)
+                sms_ts = now_ms - (age_days * 86400000) - random.randint(0, 43200000)
+                amount = round(random.uniform(4.99, 189.99), 2)
+                bal = round(random.uniform(850.0, 12500.0), 2)
+                merchant = random.choice(MERCHANTS)
+
+                if i == 0:
+                    tmpl = "{issuer}: Your {network} card ending in {last4} has been added to Google Pay."
+                else:
+                    tmpl = random.choice(SMS_TEMPLATES)
+
+                body = tmpl.format(
+                    issuer=issuer, network=network_name, last4=last4,
+                    amount=amount, merchant=merchant, phone=phone, bal=bal,
+                )
+
+                _adb_shell(self.target,
+                    f"content insert --uri content://sms "
+                    f"--bind address:s:{sender} "
+                    f"--bind body:s:'{body.replace(chr(39), '')}' "
+                    f"--bind type:i:1 "
+                    f"--bind date:l:{sms_ts} "
+                    f"--bind read:i:1 "
+                    f"--bind seen:i:1"
+                )
+
+            logger.info(f"  Bank SMS: {num_sms} notifications from {issuer} ({sender})")
+
+        except Exception as e:
+            result.errors.append(f"card_sms: {e}")
+            logger.error(f"Card SMS injection failed: {e}")
 
     # ─── HELPERS ──────────────────────────────────────────────────────
 
