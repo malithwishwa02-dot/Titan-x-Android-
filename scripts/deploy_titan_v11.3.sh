@@ -35,7 +35,7 @@ apt-get update -qq
 apt-get install -y -qq \
     docker.io docker-compose-v2 \
     adb curl wget git \
-    python3 python3-pip python3-venv \
+    python3 python3-pip python3-venv python3.12-venv \
     ffmpeg v4l2loopback-dkms v4l2loopback-utils \
     autossh jq sqlite3 \
     linux-modules-extra-$(uname -r) 2>/dev/null || true
