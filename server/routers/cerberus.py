@@ -31,8 +31,14 @@ async def cerberus_validate(request: Request):
         try:
             card_input = body.get("card_input", body.get("number", ""))
             result = engine.validate(card_input)
+            # Convert dataclass/object to dict if needed
+            if hasattr(result, '__dict__') and not isinstance(result, dict):
+                return result.__dict__
+            if hasattr(result, 'to_dict'):
+                return result.to_dict()
             return result
         except Exception as e:
+            logger.exception("Cerberus validate error")
             return {"error": str(e), "status": "error"}
     return {"result": "cerberus_engine_unavailable", "stub": True}
 
