@@ -3,644 +3,993 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Titan V11.3 — Antidetect Device Platform</title>
+<title>Titan V11.3 — Android Console</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 <link rel="manifest" href="/static/manifest.json">
 <style>
-  :root { --accent: #00d4ff; --bg: #0a0e17; --card: #111827; --card2: #1e293b; }
-  body { background: var(--bg); color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
-  .scrollbar-thin::-webkit-scrollbar { width: 6px; }
-  .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-  .glow { box-shadow: 0 0 20px rgba(0,212,255,0.15); }
-  .pulse-dot { animation: pulse 2s infinite; }
-  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
-  .sidebar-item { transition: all 0.15s; }
-  .sidebar-item:hover { background: #1e293b; }
-  .sidebar-item.active { background: #1e293b; border-left: 3px solid var(--accent); }
-  .tab-btn { transition: all 0.15s; }
-  .tab-btn.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
-  .device-card { transition: all 0.2s; cursor: pointer; }
-  .device-card:hover { border-color: var(--accent); transform: translateY(-2px); }
-  .btn-primary { background: linear-gradient(135deg, #0891b2, #06b6d4); }
-  .btn-primary:hover { background: linear-gradient(135deg, #0e7490, #0891b2); }
-  .btn-danger { background: linear-gradient(135deg, #dc2626, #ef4444); }
-  .score-ring { width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; }
+  :root{--accent:#00d4ff;--bg:#0a0e17;--card:#111827;--card2:#1e293b;--green:#22c55e;--red:#ef4444;--yellow:#eab308;--purple:#a855f7;--orange:#f97316}
+  body{background:var(--bg);color:#e2e8f0;font-family:'Inter',system-ui,sans-serif}
+  .scrollbar-thin::-webkit-scrollbar{width:6px} .scrollbar-thin::-webkit-scrollbar-thumb{background:#334155;border-radius:3px}
+  .glow{box-shadow:0 0 20px rgba(0,212,255,0.15)}
+  .pulse-dot{animation:pulse 2s infinite} @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+  .sidebar-item{transition:all .15s} .sidebar-item:hover{background:#1e293b}
+  .sidebar-item.active{background:#1e293b;border-left:3px solid var(--accent)}
+  .tab-btn{transition:all .15s;border-bottom:2px solid transparent}
+  .tab-btn.active{color:var(--accent);border-bottom:2px solid var(--accent)}
+  .device-card{transition:all .2s;cursor:pointer} .device-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .btn-primary{background:linear-gradient(135deg,#0891b2,#06b6d4)} .btn-primary:hover{background:linear-gradient(135deg,#0e7490,#0891b2)}
+  .btn-green{background:linear-gradient(135deg,#16a34a,#22c55e)} .btn-green:hover{background:linear-gradient(135deg,#15803d,#16a34a)}
+  .btn-purple{background:linear-gradient(135deg,#7c3aed,#a855f7)} .btn-purple:hover{background:linear-gradient(135deg,#6d28d9,#7c3aed)}
+  .btn-danger{background:linear-gradient(135deg,#dc2626,#ef4444)}
+  .btn-secondary{background:#374151} .btn-secondary:hover{background:#4b5563}
+  .score-ring{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
+  .inp{width:100%;background:#1e293b;border:1px solid #374151;border-radius:.5rem;padding:.5rem .75rem;font-size:.875rem;color:#fff}
+  .inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(0,212,255,.15)}
+  .inp-sm{padding:.375rem .5rem;font-size:.75rem}
+  .lbl{display:block;font-size:.6875rem;color:#9ca3af;margin-bottom:.25rem}
+  .grp{background:var(--card);border:1px solid #1f2937;border-radius:.75rem;padding:1rem}
+  .grp-title{font-size:.75rem;font-weight:600;margin-bottom:.75rem;text-transform:uppercase}
+  .log-area{font-family:'JetBrains Mono','Consolas',monospace;font-size:11px;background:#0f172a;color:#94a3b8;border:1px solid #1e293b;border-radius:.5rem;padding:.75rem;white-space:pre-wrap;overflow-y:auto;max-height:300px}
+  [x-cloak]{display:none!important}
 </style>
 </head>
 <body class="h-screen flex overflow-hidden" x-data="titanConsole()" x-init="init()">
 
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- SIDEBAR — Navigation for all 10 app sections                       -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- SIDEBAR -->
 <aside class="w-56 flex-shrink-0 bg-[#0d1117] border-r border-gray-800 flex flex-col h-full">
-  <!-- Logo -->
   <div class="p-4 border-b border-gray-800">
     <div class="flex items-center gap-2">
       <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-white font-bold text-sm">T</div>
-      <div>
-        <div class="text-sm font-bold text-cyan-400">TITAN V11.3</div>
-        <div class="text-[10px] text-gray-500">Antidetect Device</div>
-      </div>
+      <div><div class="text-sm font-bold text-cyan-400">TITAN V11.3</div><div class="text-[10px] text-gray-500">Android Console</div></div>
     </div>
   </div>
-
-  <!-- Nav Items -->
   <nav class="flex-1 overflow-y-auto scrollbar-thin py-2">
     <template x-for="item in navItems" :key="item.key">
-      <button
-        class="sidebar-item w-full text-left px-4 py-2.5 flex items-center gap-3 text-sm"
-        :class="section === item.key ? 'active text-cyan-400' : 'text-gray-400'"
-        @click="section = item.key"
-      >
-        <span x-text="item.icon" class="text-base w-5 text-center"></span>
-        <span x-text="item.label"></span>
+      <button class="sidebar-item w-full text-left px-4 py-2.5 flex items-center gap-3 text-sm"
+        :class="section===item.key?'active text-cyan-400':'text-gray-400'" @click="section=item.key">
+        <span x-text="item.icon" class="text-base w-5 text-center"></span><span x-text="item.label"></span>
         <span x-show="item.badge" x-text="item.badge" class="ml-auto text-[10px] bg-cyan-900 text-cyan-300 px-1.5 py-0.5 rounded-full"></span>
       </button>
     </template>
   </nav>
-
-  <!-- System Status -->
   <div class="p-3 border-t border-gray-800 text-[11px] text-gray-500">
     <div class="flex justify-between"><span>Devices</span><span class="text-cyan-400" x-text="devices.length"></span></div>
-    <div class="flex justify-between"><span>API</span><span class="text-green-400">●</span></div>
-    <div class="flex justify-between"><span>GPU</span><span class="text-yellow-400">●</span></div>
+    <div class="flex justify-between"><span>Profiles</span><span class="text-purple-400" x-text="profiles.length"></span></div>
+    <div class="flex justify-between"><span>API</span><span class="text-green-400">&#8226;</span></div>
   </div>
 </aside>
 
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- MAIN CONTENT AREA                                                   -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
 <main class="flex-1 flex flex-col overflow-hidden">
+<header class="h-12 border-b border-gray-800 flex items-center justify-between px-4 bg-[#0d1117]/80 backdrop-blur">
+  <div class="flex items-center gap-2"><span class="text-gray-400 text-sm font-semibold" x-text="currentNav?.label||''"></span><span class="text-gray-600">&#8212;</span><span class="text-gray-500 text-xs" x-text="currentNav?.desc||''"></span></div>
+  <span class="text-[11px] text-gray-500" x-text="new Date().toLocaleTimeString()"></span>
+</header>
+<div class="flex-1 overflow-y-auto scrollbar-thin p-4">
 
-  <!-- Top Bar -->
-  <header class="h-12 border-b border-gray-800 flex items-center justify-between px-4 bg-[#0d1117]/80 backdrop-blur">
-    <div class="flex items-center gap-2">
-      <span class="text-gray-400 text-sm" x-text="currentNav?.label || ''"></span>
-      <span class="text-gray-600">—</span>
-      <span class="text-gray-500 text-xs" x-text="currentNav?.desc || ''"></span>
-    </div>
-    <div class="flex items-center gap-3">
-      <span class="text-[11px] text-gray-500" x-text="new Date().toLocaleTimeString()"></span>
-    </div>
-  </header>
-
-  <!-- Content -->
-  <div class="flex-1 overflow-y-auto scrollbar-thin p-4">
-
-    <!-- ═══════════════ DASHBOARD ═══════════════ -->
-    <div x-show="section==='dashboard'" x-cloak>
-      <div class="grid grid-cols-4 gap-4 mb-6">
-        <div class="bg-[#111827] rounded-xl p-4 border border-gray-800">
-          <div class="text-xs text-gray-500 mb-1">Total Devices</div>
-          <div class="text-2xl font-bold text-cyan-400" x-text="devices.length">0</div>
+<!-- DASHBOARD -->
+<div x-show="section==='dashboard'" x-cloak>
+  <div class="grid grid-cols-4 gap-4 mb-6">
+    <div class="grp"><div class="text-xs text-gray-500 mb-1">Total Devices</div><div class="text-2xl font-bold text-cyan-400" x-text="devices.length"></div></div>
+    <div class="grp"><div class="text-xs text-gray-500 mb-1">Active</div><div class="text-2xl font-bold text-green-400" x-text="devices.filter(d=>d.state==='patched'||d.state==='ready').length"></div></div>
+    <div class="grp"><div class="text-xs text-gray-500 mb-1">Avg Stealth</div><div class="text-2xl font-bold text-yellow-400" x-text="avgScore+'%'"></div></div>
+    <div class="grp"><div class="text-xs text-gray-500 mb-1">Profiles</div><div class="text-2xl font-bold text-purple-400" x-text="profiles.length"></div></div>
+  </div>
+  <h3 class="text-sm font-semibold text-gray-400 mb-3">DEVICE FLEET</h3>
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+    <template x-for="dev in devices" :key="dev.id">
+      <div class="device-card grp" @click="section='devices'">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-xs font-mono text-gray-500" x-text="dev.id"></span>
+          <div class="score-ring" :class="dev.stealth_score>=90?'bg-green-900/50 text-green-400 border border-green-700':dev.stealth_score>=70?'bg-yellow-900/50 text-yellow-400 border border-yellow-700':'bg-red-900/50 text-red-400 border border-red-700'" x-text="dev.stealth_score+'%'"></div>
         </div>
-        <div class="bg-[#111827] rounded-xl p-4 border border-gray-800">
-          <div class="text-xs text-gray-500 mb-1">Active</div>
-          <div class="text-2xl font-bold text-green-400" x-text="devices.filter(d=>d.state==='patched'||d.state==='ready').length">0</div>
-        </div>
-        <div class="bg-[#111827] rounded-xl p-4 border border-gray-800">
-          <div class="text-xs text-gray-500 mb-1">Avg Stealth</div>
-          <div class="text-2xl font-bold text-yellow-400" x-text="avgScore + '%'">0%</div>
-        </div>
-        <div class="bg-[#111827] rounded-xl p-4 border border-gray-800">
-          <div class="text-xs text-gray-500 mb-1">GPU</div>
-          <div class="text-2xl font-bold text-purple-400">RTX 3090</div>
-        </div>
+        <div class="text-sm font-semibold text-white mb-1" x-text="presetName(dev.config?.model)"></div>
+        <div class="text-xs text-gray-500" x-text="(dev.config?.carrier||'').replace('_',' ')+' &#183; '+(dev.config?.country||'')"></div>
+        <div class="mt-3 flex items-center gap-2"><span class="w-2 h-2 rounded-full" :class="dev.state==='patched'?'bg-green-500':dev.state==='ready'?'bg-cyan-500':'bg-yellow-500 pulse-dot'"></span><span class="text-[11px] text-gray-400" x-text="dev.state"></span></div>
       </div>
-
-      <!-- Device Cards -->
-      <h3 class="text-sm font-semibold text-gray-400 mb-3">DEVICE FLEET</h3>
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        <template x-for="dev in devices" :key="dev.id">
-          <div class="device-card bg-[#111827] rounded-xl p-4 border border-gray-800" @click="selectDevice(dev)">
-            <div class="flex items-center justify-between mb-3">
-              <span class="text-xs font-mono text-gray-500" x-text="dev.id"></span>
-              <div class="score-ring"
-                :class="dev.stealth_score >= 90 ? 'bg-green-900/50 text-green-400 border border-green-700' : dev.stealth_score >= 70 ? 'bg-yellow-900/50 text-yellow-400 border border-yellow-700' : 'bg-red-900/50 text-red-400 border border-red-700'"
-                x-text="dev.stealth_score + '%'"></div>
-            </div>
-            <div class="text-sm font-semibold text-white mb-1" x-text="presetName(dev.config?.model)"></div>
-            <div class="text-xs text-gray-500" x-text="(dev.config?.carrier || '').replace('_',' ') + ' · ' + (dev.config?.country || '')"></div>
-            <div class="mt-3 flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full"
-                :class="dev.state==='patched'?'bg-green-500': dev.state==='ready'?'bg-cyan-500': dev.state==='booting'?'bg-yellow-500 pulse-dot':'bg-red-500'"></span>
-              <span class="text-[11px] text-gray-400" x-text="dev.state"></span>
-            </div>
-          </div>
-        </template>
-
-        <!-- New Device Card -->
-        <div class="device-card bg-[#111827] rounded-xl p-4 border border-dashed border-gray-700 flex flex-col items-center justify-center min-h-[160px]"
-          @click="section='devices'">
-          <div class="text-3xl text-gray-600 mb-2">+</div>
-          <div class="text-sm text-gray-500">Create Device</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══════════════ DEVICES ═══════════════ -->
-    <div x-show="section==='devices'" x-cloak>
-      <!-- Create Device Form -->
-      <div class="bg-[#111827] rounded-xl p-6 border border-gray-800 mb-6 glow">
-        <h3 class="text-sm font-semibold text-cyan-400 mb-4">CREATE NEW DEVICE</h3>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-          <div>
-            <label class="text-[11px] text-gray-500 block mb-1">Device Model</label>
-            <select x-model="newDevice.model" class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-              <template x-for="p in presets" :key="p.key">
-                <option :value="p.key" x-text="p.name"></option>
-              </template>
-            </select>
-          </div>
-          <div>
-            <label class="text-[11px] text-gray-500 block mb-1">Country</label>
-            <select x-model="newDevice.country" class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-              <option value="US">United States</option>
-              <option value="GB">United Kingdom</option>
-              <option value="DE">Germany</option>
-              <option value="FR">France</option>
-            </select>
-          </div>
-          <div>
-            <label class="text-[11px] text-gray-500 block mb-1">Carrier</label>
-            <select x-model="newDevice.carrier" class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-              <template x-for="(c, key) in carriers" :key="key">
-                <option :value="key" x-text="c.name + ' (' + c.country + ')'"></option>
-              </template>
-            </select>
-          </div>
-          <div>
-            <label class="text-[11px] text-gray-500 block mb-1">Location</label>
-            <select x-model="newDevice.location" class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-              <template x-for="(loc, key) in locations" :key="key">
-                <option :value="key" x-text="key.toUpperCase() + ' (' + loc.tz + ')'"></option>
-              </template>
-            </select>
-          </div>
-        </div>
-        <button @click="createDevice()" :disabled="creating"
-          class="btn-primary text-white px-6 py-2 rounded-lg text-sm font-medium disabled:opacity-50">
-          <span x-show="!creating">Create & Auto-Patch</span>
-          <span x-show="creating">Creating...</span>
-        </button>
-      </div>
-
-      <!-- Device List -->
-      <div class="space-y-3">
-        <template x-for="dev in devices" :key="dev.id">
-          <div class="bg-[#111827] rounded-xl p-4 border border-gray-800 flex items-center gap-4">
-            <div class="score-ring flex-shrink-0"
-              :class="dev.stealth_score >= 90 ? 'bg-green-900/50 text-green-400 border border-green-700' : 'bg-yellow-900/50 text-yellow-400 border border-yellow-700'"
-              x-text="dev.stealth_score + '%'"></div>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-semibold text-white" x-text="presetName(dev.config?.model)"></span>
-                <span class="text-xs font-mono text-gray-500" x-text="dev.id"></span>
-                <span class="w-2 h-2 rounded-full" :class="dev.state==='patched'?'bg-green-500':'bg-yellow-500'"></span>
-              </div>
-              <div class="text-xs text-gray-500 mt-0.5"
-                x-text="(dev.config?.carrier||'').replace('_',' ') + ' · ' + (dev.config?.country||'') + ' · ADB ' + (dev.adb_target||'')"></div>
-            </div>
-            <div class="flex gap-2">
-              <button @click="viewDevice(dev)" class="px-3 py-1.5 bg-cyan-900/50 text-cyan-400 rounded-lg text-xs hover:bg-cyan-900">Screen</button>
-              <button @click="patchDevice(dev.id)" class="px-3 py-1.5 bg-green-900/50 text-green-400 rounded-lg text-xs hover:bg-green-900">Re-Patch</button>
-              <button @click="auditDevice(dev.id)" class="px-3 py-1.5 bg-yellow-900/50 text-yellow-400 rounded-lg text-xs hover:bg-yellow-900">Audit</button>
-              <button @click="deleteDevice(dev.id)" class="px-3 py-1.5 bg-red-900/50 text-red-400 rounded-lg text-xs hover:bg-red-900">Destroy</button>
-            </div>
-          </div>
-        </template>
-      </div>
-    </div>
-
-    <!-- ═══════════════ GENESIS FORGE ═══════════════ -->
-    <div x-show="section==='genesis'" x-cloak>
-      <!-- Tab bar -->
-      <div class="flex gap-1 border-b border-gray-800 mb-4">
-        <template x-for="tab in ['Forge','Profiles','Inject','Warm','Export','Archetypes','Targets','Identity','Operations','Quality','History']">
-          <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="genesisTab===tab?'active':''" @click="genesisTab=tab" x-text="tab"></button>
-        </template>
-      </div>
-
-      <!-- Forge Tab -->
-      <div x-show="genesisTab==='Forge'">
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div class="lg:col-span-1 bg-[#111827] rounded-xl p-6 border border-gray-800 glow">
-            <h3 class="text-sm font-semibold text-cyan-400 mb-4">FORGE ANDROID DEVICE PROFILE</h3>
-            <p class="text-[11px] text-gray-500 mb-4">Generates: contacts, call logs, SMS, Chrome cookies/history, gallery photos, app installs, WiFi networks, autofill — all persona-tied and aged.</p>
-            <div class="space-y-3">
-              <div class="grid grid-cols-2 gap-3">
-                <div>
-                  <label class="text-[11px] text-gray-500 block mb-1">Persona Name</label>
-                  <input type="text" x-model="forgeForm.name" placeholder="Auto-generate"
-                    class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-                </div>
-                <div>
-                  <label class="text-[11px] text-gray-500 block mb-1">Email</label>
-                  <input type="text" x-model="forgeForm.email" placeholder="Auto-generate"
-                    class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-                </div>
-              </div>
-              <div class="grid grid-cols-2 gap-3">
-                <div>
-                  <label class="text-[11px] text-gray-500 block mb-1">Country</label>
-                  <select x-model="forgeForm.country" class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-                    <option value="US">United States</option>
-                    <option value="GB">United Kingdom</option>
-                    <option value="DE">Germany</option>
-                    <option value="FR">France</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="text-[11px] text-gray-500 block mb-1">Archetype</label>
-                  <select x-model="forgeForm.archetype" class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-                    <option value="professional">Professional</option>
-                    <option value="student">Student</option>
-                    <option value="casual_shopper">Casual Shopper</option>
-                    <option value="gamer">Gamer</option>
-                    <option value="retiree">Retiree</option>
-                  </select>
-                </div>
-              </div>
-              <div class="grid grid-cols-3 gap-3">
-                <div>
-                  <label class="text-[11px] text-gray-500 block mb-1">Age (days)</label>
-                  <input type="number" x-model.number="forgeForm.age_days" min="7" max="365"
-                    class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-                </div>
-                <div>
-                  <label class="text-[11px] text-gray-500 block mb-1">Carrier</label>
-                  <select x-model="forgeForm.carrier" class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-                    <template x-for="(c, key) in carriers" :key="key">
-                      <option :value="key" x-text="c.name"></option>
-                    </template>
-                  </select>
-                </div>
-                <div>
-                  <label class="text-[11px] text-gray-500 block mb-1">Device</label>
-                  <select x-model="forgeForm.device_model" class="w-full bg-[#1e293b] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-                    <template x-for="p in presets" :key="p.key">
-                      <option :value="p.key" x-text="p.name"></option>
-                    </template>
-                  </select>
-                </div>
-              </div>
-              <button @click="forgeProfile()" :disabled="forging"
-                class="btn-primary w-full text-white px-4 py-2.5 rounded-lg text-sm font-medium mt-2 disabled:opacity-50">
-                <span x-show="!forging">Forge Device Profile</span>
-                <span x-show="forging">Forging...</span>
-              </button>
-              <div x-show="forgeResult" class="mt-3 bg-green-900/30 border border-green-800 rounded-lg p-3 text-xs">
-                <div class="text-green-400 font-semibold mb-1">Profile Forged!</div>
-                <div class="text-green-300" x-text="'ID: ' + (forgeResult?.profile_id || '')"></div>
-                <div class="text-gray-400 mt-1" x-text="forgeResult?.stats ? `Contacts: ${forgeResult.stats.contacts} · Calls: ${forgeResult.stats.call_logs} · SMS: ${forgeResult.stats.sms} · Cookies: ${forgeResult.stats.cookies} · History: ${forgeResult.stats.history} · Photos: ${forgeResult.stats.gallery}` : ''"></div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Recent Profiles -->
-          <div class="lg:col-span-2 bg-[#111827] rounded-xl p-6 border border-gray-800">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-sm font-semibold text-cyan-400">FORGED PROFILES</h3>
-              <button @click="loadProfiles()" class="text-xs text-gray-400 hover:text-white">Refresh</button>
-            </div>
-            <div x-show="!profiles.length" class="text-sm text-gray-500">No profiles yet. Forge one to get started.</div>
-            <div class="space-y-2">
-              <template x-for="p in profiles" :key="p.id">
-                <div class="bg-[#1e293b] rounded-lg p-3 flex items-center gap-4">
-                  <div class="w-10 h-10 rounded-full bg-gradient-to-br from-purple-600 to-cyan-500 flex items-center justify-center text-white font-bold text-sm" x-text="(p.persona_name||'?')[0]"></div>
-                  <div class="flex-1 min-w-0">
-                    <div class="text-sm font-semibold text-white" x-text="p.persona_name || p.id"></div>
-                    <div class="text-[11px] text-gray-500" x-text="(p.persona_email||'') + ' · ' + (p.country||'') + ' · ' + (p.age_days||0) + 'd · ' + (p.archetype||'')"></div>
-                    <div class="text-[10px] text-gray-600 mt-0.5" x-text="p.stats ? `C:${p.stats.contacts} Calls:${p.stats.call_logs} SMS:${p.stats.sms} Cook:${p.stats.cookies} Hist:${p.stats.history} Pho:${p.stats.gallery}` : ''"></div>
-                  </div>
-                  <div class="flex gap-2 flex-shrink-0">
-                    <select class="bg-[#111827] border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 inject-device-select">
-                      <option value="">Select device</option>
-                      <template x-for="d in devices" :key="d.id">
-                        <option :value="d.id" x-text="d.id + ' (' + presetName(d.config?.model) + ')'"></option>
-                      </template>
-                    </select>
-                    <button @click="injectProfile(p.id, $el.parentElement.querySelector('.inject-device-select').value)"
-                      class="px-3 py-1.5 bg-purple-900/50 text-purple-400 rounded-lg text-xs hover:bg-purple-900">Inject</button>
-                    <button @click="deleteProfile(p.id)"
-                      class="px-2 py-1.5 bg-red-900/50 text-red-400 rounded-lg text-xs hover:bg-red-900">×</button>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Other Genesis Tabs -->
-      <div x-show="genesisTab!=='Forge'">
-        <div class="bg-[#111827] rounded-xl p-6 border border-gray-800">
-          <div class="text-sm text-gray-500" x-text="'Genesis → ' + genesisTab + ' — Connected to V11 core modules'"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══════════════ INTELLIGENCE ═══════════════ -->
-    <div x-show="section==='intel'" x-cloak>
-      <!-- Tab bar -->
-      <div class="flex gap-1 border-b border-gray-800 mb-4">
-        <template x-for="tab in ['AI Copilot','3DS Strategy','Detection','Recon','Memory','Discovery','Dark Web']">
-          <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="intelTab===tab?'active':''" @click="intelTab=tab" x-text="tab"></button>
-        </template>
-      </div>
-      <div class="bg-[#111827] rounded-xl p-6 border border-gray-800">
-        <div class="text-sm text-gray-500" x-text="'Intelligence → ' + intelTab + ' — Connected to V11 core modules'"></div>
-      </div>
-    </div>
-
-    <!-- ═══════════════ NETWORK ═══════════════ -->
-    <div x-show="section==='network'" x-cloak>
-      <div class="flex gap-1 border-b border-gray-800 mb-4">
-        <template x-for="tab in ['Mullvad VPN','Network Shield','Forensic','Proxy/DNS']">
-          <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="networkTab===tab?'active':''" @click="networkTab=tab" x-text="tab"></button>
-        </template>
-      </div>
-      <div class="bg-[#111827] rounded-xl p-6 border border-gray-800">
-        <div class="text-sm text-gray-500" x-text="'Network → ' + networkTab"></div>
-      </div>
-    </div>
-
-    <!-- ═══════════════ CERBERUS ═══════════════ -->
-    <div x-show="section==='cerberus'" x-cloak>
-      <div class="flex gap-1 border-b border-gray-800 mb-4">
-        <template x-for="tab in ['Validate','Batch','Routing','Vault','Analytics','Intelligence','Connectors','BIN Testing']">
-          <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="cerberusTab===tab?'active':''" @click="cerberusTab=tab" x-text="tab"></button>
-        </template>
-      </div>
-      <div class="bg-[#111827] rounded-xl p-6 border border-gray-800">
-        <div class="text-sm text-gray-500" x-text="'Cerberus → ' + cerberusTab"></div>
-      </div>
-    </div>
-
-    <!-- ═══════════════ TARGETS ═══════════════ -->
-    <div x-show="section==='targets'" x-cloak>
-      <div class="flex gap-1 border-b border-gray-800 mb-4">
-        <template x-for="tab in ['Analyze','Database','Discover','Subdomains','WAF','SSL','DNS & Email','Headers','Score','Batch']">
-          <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="targetsTab===tab?'active':''" @click="targetsTab=tab" x-text="tab"></button>
-        </template>
-      </div>
-      <div class="bg-[#111827] rounded-xl p-6 border border-gray-800">
-        <div class="text-sm text-gray-500" x-text="'Target Analyzer → ' + targetsTab"></div>
-      </div>
-    </div>
-
-    <!-- ═══════════════ KYC / DEEPFAKE ═══════════════ -->
-    <div x-show="section==='kyc'" x-cloak>
-      <div class="flex gap-1 border-b border-gray-800 mb-4">
-        <template x-for="tab in ['Android Device','Camera & Face','KYC Flow','Voice','Log']">
-          <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="kycTab===tab?'active':''" @click="kycTab=tab" x-text="tab"></button>
-        </template>
-      </div>
-      <div class="bg-[#111827] rounded-xl p-6 border border-gray-800">
-        <div class="text-sm text-gray-500" x-text="'KYC Studio → ' + kycTab"></div>
-      </div>
-    </div>
-
-    <!-- ═══════════════ ADMIN ═══════════════ -->
-    <div x-show="section==='admin'" x-cloak>
-      <div class="flex gap-1 border-b border-gray-800 mb-4">
-        <template x-for="tab in ['Services','Tools','System','Automation','Diagnostics','Dashboard']">
-          <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="adminTab===tab?'active':''" @click="adminTab=tab" x-text="tab"></button>
-        </template>
-      </div>
-      <div class="bg-[#111827] rounded-xl p-6 border border-gray-800">
-        <div class="text-sm text-gray-500" x-text="'Admin → ' + adminTab"></div>
-      </div>
-    </div>
-
-    <!-- ═══════════════ AI TASKS ═══════════════ -->
-    <div x-show="section==='ai'" x-cloak>
-      <div class="flex gap-1 border-b border-gray-800 mb-4">
-        <template x-for="tab in ['Tasks','Metrics','Providers','Testing']">
-          <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="aiTab===tab?'active':''" @click="aiTab=tab" x-text="tab"></button>
-        </template>
-      </div>
-      <div class="bg-[#111827] rounded-xl p-6 border border-gray-800">
-        <div class="text-sm text-gray-500" x-text="'AI Tasks → ' + aiTab"></div>
-      </div>
-    </div>
-
-    <!-- ═══════════════ SETTINGS ═══════════════ -->
-    <div x-show="section==='settings'" x-cloak>
-      <div class="flex gap-1 border-b border-gray-800 mb-4">
-        <template x-for="tab in ['VPN','AI','Services','Browser','API Keys','System','Hyperswitch','Proxy','Android']">
-          <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="settingsTab===tab?'active':''" @click="settingsTab=tab" x-text="tab"></button>
-        </template>
-      </div>
-      <div class="bg-[#111827] rounded-xl p-6 border border-gray-800">
-        <div class="text-sm text-gray-500" x-text="'Settings → ' + settingsTab"></div>
-      </div>
-    </div>
-
-  </div><!-- /content -->
-</main>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- DEVICE SCREEN MODAL                                                 -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<div x-show="showScreen" x-cloak class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center" @click.self="showScreen=false">
-  <div class="bg-[#111827] rounded-2xl border border-gray-700 overflow-hidden w-[420px]">
-    <div class="flex items-center justify-between px-4 py-2 border-b border-gray-800">
-      <span class="text-sm text-cyan-400" x-text="screenDevice?.id || ''"></span>
-      <div class="flex gap-2">
-        <a :href="'/scrcpy/'" target="_blank" class="text-xs text-gray-400 hover:text-white px-2 py-1 bg-[#1e293b] rounded">HD Stream</a>
-        <button @click="showScreen=false" class="text-gray-400 hover:text-white text-lg">&times;</button>
-      </div>
-    </div>
-    <div class="bg-black flex items-center justify-center" style="height:600px">
-      <canvas id="screenCanvas" width="540" height="600" class="max-w-full max-h-full"></canvas>
-    </div>
-    <div class="flex justify-center gap-4 py-2 border-t border-gray-800">
-      <button class="text-xs text-gray-400 hover:text-white px-3 py-1">◀ Back</button>
-      <button class="text-xs text-gray-400 hover:text-white px-3 py-1">● Home</button>
-      <button class="text-xs text-gray-400 hover:text-white px-3 py-1">▶ Recents</button>
+    </template>
+    <div class="device-card grp border-dashed !border-gray-700 flex flex-col items-center justify-center min-h-[160px]" @click="section='devices'">
+      <div class="text-3xl text-gray-600 mb-2">+</div><div class="text-sm text-gray-500">Create Device</div>
     </div>
   </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- ALPINE.JS APP                                                       -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- DEVICES -->
+<div x-show="section==='devices'" x-cloak>
+  <div class="grp mb-6 glow">
+    <h3 class="grp-title text-cyan-400">Create New Device</h3>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      <div><label class="lbl">Device Model</label><select x-model="newDevice.model" class="inp"><template x-for="p in presets" :key="p.key"><option :value="p.key" x-text="p.name"></option></template></select></div>
+      <div><label class="lbl">Country</label><select x-model="newDevice.country" class="inp"><option value="US">United States</option><option value="GB">United Kingdom</option><option value="DE">Germany</option><option value="FR">France</option><option value="CA">Canada</option><option value="AU">Australia</option><option value="NL">Netherlands</option><option value="JP">Japan</option><option value="BR">Brazil</option></select></div>
+      <div><label class="lbl">Carrier</label><select x-model="newDevice.carrier" class="inp"><template x-for="(c,key) in carriers" :key="key"><option :value="key" x-text="c.name+' ('+c.country+')'"></option></template></select></div>
+      <div><label class="lbl">Location</label><select x-model="newDevice.location" class="inp"><template x-for="(loc,key) in locations" :key="key"><option :value="key" x-text="key.toUpperCase()+' ('+loc.tz+')'"></option></template></select></div>
+    </div>
+    <button @click="createDevice()" :disabled="creating" class="btn-primary text-white px-6 py-2 rounded-lg text-sm font-medium disabled:opacity-50"><span x-show="!creating">Create &amp; Auto-Patch</span><span x-show="creating">Creating...</span></button>
+  </div>
+  <div class="space-y-3">
+    <template x-for="dev in devices" :key="dev.id">
+      <div class="grp flex items-center gap-4">
+        <div class="score-ring flex-shrink-0" :class="dev.stealth_score>=90?'bg-green-900/50 text-green-400 border border-green-700':'bg-yellow-900/50 text-yellow-400 border border-yellow-700'" x-text="dev.stealth_score+'%'"></div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2"><span class="text-sm font-semibold text-white" x-text="presetName(dev.config?.model)"></span><span class="text-xs font-mono text-gray-500" x-text="dev.id"></span></div>
+          <div class="text-xs text-gray-500 mt-0.5" x-text="(dev.config?.carrier||'').replace('_',' ')+' &#183; '+(dev.config?.country||'')+' &#183; ADB '+(dev.adb_target||'')"></div>
+        </div>
+        <div class="flex gap-2">
+          <button @click="viewDevice(dev)" class="px-3 py-1.5 bg-cyan-900/50 text-cyan-400 rounded-lg text-xs hover:bg-cyan-900">Screen</button>
+          <button @click="patchDevice(dev.id)" class="px-3 py-1.5 bg-green-900/50 text-green-400 rounded-lg text-xs hover:bg-green-900">Re-Patch</button>
+          <button @click="auditDevice(dev.id)" class="px-3 py-1.5 bg-yellow-900/50 text-yellow-400 rounded-lg text-xs hover:bg-yellow-900">Audit</button>
+          <button @click="deleteDevice(dev.id)" class="px-3 py-1.5 bg-red-900/50 text-red-400 rounded-lg text-xs hover:bg-red-900">Destroy</button>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<!-- GENESIS STUDIO -->
+<div x-show="section==='genesis'" x-cloak>
+  <div class="flex gap-1 border-b border-gray-800 mb-4 flex-wrap">
+    <template x-for="tab in ['Forge','Smart Forge','Profiles','Inject','Device Aging','History','Hardening','Cookies','Vault','Target','Results']">
+      <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="genesisTab===tab?'active':''" @click="genesisTab=tab" x-text="tab"></button>
+    </template>
+  </div>
+
+  <!-- FORGE -->
+  <div x-show="genesisTab==='Forge'">
+    <div class="space-y-4">
+      <div class="grp glow">
+        <h3 class="grp-title text-green-400">Identity</h3>
+        <div class="space-y-3">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div class="md:col-span-2"><label class="lbl">Full Name</label><input type="text" x-model="forge.name" placeholder="Full name" class="inp"></div>
+            <div><label class="lbl">Gender</label><select x-model="forge.gender" class="inp"><option value="auto">Auto</option><option value="M">Male</option><option value="F">Female</option></select></div>
+            <div><label class="lbl">Country</label><select x-model="forge.country" class="inp"><option value="US">United States</option><option value="GB">United Kingdom</option><option value="CA">Canada</option><option value="AU">Australia</option><option value="DE">Germany</option><option value="FR">France</option><option value="NL">Netherlands</option><option value="IT">Italy</option><option value="ES">Spain</option><option value="BE">Belgium</option><option value="JP">Japan</option><option value="BR">Brazil</option><option value="MX">Mexico</option></select></div>
+          </div>
+          <div class="grid grid-cols-3 gap-3">
+            <div><label class="lbl">DOB (DD/MM/YYYY)</label><input type="text" x-model="forge.dob" placeholder="DD/MM/YYYY" class="inp"></div>
+            <div><label class="lbl">National ID (SSN/NIN/TFN)</label><input type="text" x-model="forge.ssn" placeholder="National ID" class="inp"></div>
+            <div><label class="lbl">Phone Number</label><input type="text" x-model="forge.phone" placeholder="Phone number" class="inp"></div>
+          </div>
+          <div><label class="lbl">Street Address</label><input type="text" x-model="forge.street" placeholder="Street address" class="inp"></div>
+          <div class="grid grid-cols-3 gap-3">
+            <div><label class="lbl">City</label><input type="text" x-model="forge.city" placeholder="City" class="inp"></div>
+            <div><label class="lbl">State / Region</label><input type="text" x-model="forge.state" placeholder="State" class="inp"></div>
+            <div><label class="lbl">Zip / Postcode</label><input type="text" x-model="forge.zip" placeholder="Zip" class="inp"></div>
+          </div>
+          <div class="grid grid-cols-3 gap-3">
+            <div><label class="lbl">CC Number</label><input type="text" x-model="forge.cc" placeholder="Card number" class="inp"></div>
+            <div><label class="lbl">Expiry (MM/YYYY)</label><input type="text" x-model="forge.cc_exp" placeholder="MM/YYYY" class="inp"></div>
+            <div><label class="lbl">CVV</label><input type="text" x-model="forge.cc_cvv" placeholder="CVV" class="inp"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Options -->
+      <div class="grp" x-data="{open:false}">
+        <div class="flex items-center justify-between cursor-pointer" @click="open=!open">
+          <h3 class="grp-title text-gray-400 mb-0">Options (auto-derived)</h3>
+          <span class="text-gray-500 text-xs" x-text="open?'\u25BC':'\u25B6'"></span>
+        </div>
+        <div x-show="open" class="mt-3 space-y-3">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div><label class="lbl">Email</label><input type="text" x-model="forge.email" placeholder="Auto from name" class="inp"></div>
+            <div><label class="lbl">Target Site</label><select x-model="forge.target" class="inp"><option value="">None</option><option value="amazon.com">amazon.com</option><option value="paypal.com">paypal.com</option><option value="ebay.com">ebay.com</option><option value="stripe.com">stripe.com</option><option value="shopify.com">shopify.com</option><option value="walmart.com">walmart.com</option></select></div>
+            <div><label class="lbl">Occupation</label><select x-model="forge.occupation" class="inp"><option value="auto">Auto</option><option value="retiree">Retiree</option><option value="software_engineer">Software Engineer</option><option value="doctor">Doctor</option><option value="teacher">Teacher</option><option value="gamer">Gamer</option><option value="freelancer">Freelancer</option><option value="retail_worker">Retail Worker</option><option value="student">Student</option><option value="small_business_owner">Small Business</option></select></div>
+            <div class="flex items-end pb-1"><label class="flex items-center gap-2 text-xs text-gray-400"><input type="checkbox" x-model="forge.use_ai" class="rounded"> AI Enrichment</label></div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="lbl">Proxy (socks5://user:pass@host:port)</label><div class="flex gap-2"><input type="text" x-model="forge.proxy" placeholder="socks5://user:pass@host:port" class="inp flex-1"><button @click="testProxy()" class="btn-secondary text-white px-3 py-1 rounded-lg text-xs">Test</button></div></div>
+            <div><label class="lbl">Proxy Status</label><div class="inp bg-[#0f172a] text-xs text-gray-500 h-[38px] flex items-center" x-text="forge.proxy_status||'Not tested'"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- OSINT Recon -->
+      <div class="grp" x-data="{open:false}">
+        <div class="flex items-center justify-between cursor-pointer" @click="open=!open">
+          <h3 class="grp-title text-purple-400 mb-0">OSINT Recon</h3>
+          <span class="text-gray-500 text-xs" x-text="open?'\u25BC':'\u25B6'"></span>
+        </div>
+        <div x-show="open" class="mt-3 space-y-3">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div><label class="lbl">Name</label><input type="text" x-model="forge.osint_name" placeholder="Target name" class="inp"></div>
+            <div><label class="lbl">Email</label><input type="text" x-model="forge.osint_email" placeholder="target@email.com" class="inp"></div>
+            <div><label class="lbl">Username</label><input type="text" x-model="forge.osint_username" placeholder="username" class="inp"></div>
+            <div><label class="lbl">Phone</label><input type="text" x-model="forge.osint_phone" placeholder="+1-555-123-4567" class="inp"></div>
+          </div>
+          <div class="grid grid-cols-3 gap-3">
+            <div><label class="lbl">Instagram</label><input type="text" x-model="forge.osint_instagram" placeholder="@handle" class="inp"></div>
+            <div><label class="lbl">Domain</label><input type="text" x-model="forge.osint_domain" placeholder="example.com" class="inp"></div>
+            <div><label class="lbl">Location</label><input type="text" x-model="forge.osint_location" placeholder="City, State" class="inp"></div>
+          </div>
+          <div class="flex gap-2">
+            <button @click="runOsint()" class="btn-purple text-white px-4 py-2 rounded-lg text-xs font-semibold">RUN OSINT RECON</button>
+            <button @click="applyOsint()" class="btn-secondary text-white px-4 py-2 rounded-lg text-xs font-semibold">APPLY TO PROFILE</button>
+          </div>
+          <div class="log-area h-20" x-text="osintLog||'Run OSINT to gather intelligence'"></div>
+        </div>
+      </div>
+
+      <!-- Android Device & Aging -->
+      <div class="grp">
+        <h3 class="grp-title text-cyan-400">Android Device &amp; Aging</h3>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div><label class="lbl">Target Device</label><select x-model="forge.device_id" class="inp"><option value="">None (forge only)</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ('+presetName(d.config?.model)+')'"></option></template></select></div>
+          <div><label class="lbl">Age (days)</label><input type="number" x-model.number="forge.age_days" min="0" max="900" class="inp"></div>
+          <div><label class="lbl">Device Model</label><select x-model="forge.device_model" class="inp"><template x-for="p in presets" :key="p.key"><option :value="p.key" x-text="p.name"></option></template></select></div>
+          <div><label class="lbl">Carrier</label><select x-model="forge.carrier" class="inp"><template x-for="(c,key) in carriers" :key="key"><option :value="key" x-text="c.name"></option></template></select></div>
+          <div><label class="lbl">Location</label><select x-model="forge.location" class="inp"><template x-for="(loc,key) in locations" :key="key"><option :value="key" x-text="key.toUpperCase()"></option></template></select></div>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="flex gap-3 flex-wrap">
+        <button @click="forgeAndInject()" :disabled="forging" class="btn-green text-black px-6 py-3 rounded-lg text-sm font-bold disabled:opacity-50"><span x-show="!forging">FORGE + INJECT INTO DEVICE</span><span x-show="forging">Working...</span></button>
+        <button @click="forgeOnly()" :disabled="forging" class="btn-primary text-white px-6 py-3 rounded-lg text-sm font-bold disabled:opacity-50">FORGE ONLY</button>
+        <button @click="previewProfile()" class="btn-secondary text-white px-6 py-3 rounded-lg text-sm font-bold">PREVIEW PROFILE</button>
+      </div>
+      <div class="log-area h-48" x-text="forgeLog||'Enter identity data and click FORGE'"></div>
+      <div x-show="forgeResult" class="grp border-green-800 bg-green-900/20">
+        <div class="text-green-400 font-semibold text-sm mb-2">Profile Forged</div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+          <div><span class="text-gray-500">ID:</span> <span class="text-white font-mono" x-text="forgeResult?.profile_id"></span></div>
+          <div><span class="text-gray-500">Contacts:</span> <span class="text-white" x-text="forgeResult?.stats?.contacts"></span></div>
+          <div><span class="text-gray-500">Calls:</span> <span class="text-white" x-text="forgeResult?.stats?.call_logs"></span></div>
+          <div><span class="text-gray-500">SMS:</span> <span class="text-white" x-text="forgeResult?.stats?.sms"></span></div>
+          <div><span class="text-gray-500">Cookies:</span> <span class="text-white" x-text="forgeResult?.stats?.cookies"></span></div>
+          <div><span class="text-gray-500">History:</span> <span class="text-white" x-text="forgeResult?.stats?.history"></span></div>
+          <div><span class="text-gray-500">Photos:</span> <span class="text-white" x-text="forgeResult?.stats?.gallery"></span></div>
+          <div><span class="text-gray-500">Trust:</span> <span class="text-white font-bold" x-text="forgeResult?.trust_score||'&#8212;'"></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SMART FORGE -->
+  <div x-show="genesisTab==='Smart Forge'">
+    <div class="space-y-4">
+      <div class="grp glow">
+        <h3 class="grp-title text-green-400">AI Smart Forge</h3>
+        <p class="text-[11px] text-gray-500 mb-3">Provide occupation, country, age &#8212; AI generates a complete unique profile.</p>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          <div><label class="lbl">Occupation</label><select x-model="smartForge.occupation" class="inp"><option value="auto">Auto</option><option value="software_engineer">Software Engineer</option><option value="doctor">Doctor</option><option value="teacher">Teacher</option><option value="retiree">Retiree</option><option value="gamer">Gamer</option><option value="freelancer">Freelancer</option><option value="student">Student</option><option value="small_business_owner">Small Business</option><option value="government_worker">Government Worker</option></select></div>
+          <div><label class="lbl">Country</label><select x-model="smartForge.country" class="inp"><option value="US">US</option><option value="GB">GB</option><option value="CA">CA</option><option value="AU">AU</option><option value="DE">DE</option><option value="FR">FR</option></select></div>
+          <div><label class="lbl">Age</label><input type="number" x-model.number="smartForge.age" min="18" max="80" class="inp"></div>
+          <div><label class="lbl">Gender</label><select x-model="smartForge.gender" class="inp"><option value="auto">Auto</option><option value="M">Male</option><option value="F">Female</option></select></div>
+        </div>
+        <div class="grid grid-cols-3 gap-3 mb-3">
+          <div><label class="lbl">Target Site</label><input type="text" x-model="smartForge.target_site" placeholder="amazon.com" class="inp"></div>
+          <div><label class="lbl">Age Days</label><input type="number" x-model.number="smartForge.age_days" min="0" max="900" class="inp"></div>
+          <div class="flex items-end pb-1"><label class="flex items-center gap-2 text-xs text-gray-400"><input type="checkbox" x-model="smartForge.use_ai" class="rounded"> AI</label></div>
+        </div>
+      </div>
+      <div class="grp" x-data="{open:false}">
+        <div class="flex items-center justify-between cursor-pointer" @click="open=!open"><h3 class="grp-title text-cyan-400 mb-0">Identity Override</h3><span class="text-gray-500 text-xs" x-text="open?'\u25BC':'\u25B6'"></span></div>
+        <div x-show="open" class="mt-3 space-y-3">
+          <div class="grid grid-cols-2 gap-3"><div><label class="lbl">Name</label><input type="text" x-model="smartForge.name" placeholder="Full name" class="inp"></div><div><label class="lbl">Email</label><input type="text" x-model="smartForge.email" placeholder="Auto" class="inp"></div></div>
+          <div class="grid grid-cols-3 gap-3"><div><label class="lbl">DOB</label><input type="text" x-model="smartForge.dob" placeholder="DD/MM/YYYY" class="inp"></div><div><label class="lbl">SSN</label><input type="text" x-model="smartForge.ssn" placeholder="SSN/NIN" class="inp"></div><div><label class="lbl">Phone</label><input type="text" x-model="smartForge.phone" placeholder="Phone" class="inp"></div></div>
+          <div><label class="lbl">Address</label><input type="text" x-model="smartForge.street" placeholder="Street" class="inp"></div>
+          <div class="grid grid-cols-3 gap-3"><div><label class="lbl">City</label><input type="text" x-model="smartForge.city" placeholder="City" class="inp"></div><div><label class="lbl">State</label><input type="text" x-model="smartForge.state" placeholder="State" class="inp"></div><div><label class="lbl">Zip</label><input type="text" x-model="smartForge.zip" placeholder="Zip" class="inp"></div></div>
+          <div class="grid grid-cols-3 gap-3"><div><label class="lbl">CC</label><input type="text" x-model="smartForge.cc" placeholder="Card" class="inp"></div><div><label class="lbl">Exp</label><input type="text" x-model="smartForge.cc_exp" placeholder="MM/YYYY" class="inp"></div><div><label class="lbl">CVV</label><input type="text" x-model="smartForge.cc_cvv" placeholder="CVV" class="inp"></div></div>
+        </div>
+      </div>
+      <div class="grp">
+        <div class="grid grid-cols-2 gap-3 mb-3"><div><label class="lbl">Inject Into Device</label><select x-model="smartForge.device_id" class="inp"><option value="">None</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ('+presetName(d.config?.model)+')'"></option></template></select></div></div>
+        <div class="flex gap-3">
+          <button @click="runSmartForge(false)" :disabled="forging" class="btn-green text-black px-5 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50">FORGE + INJECT</button>
+          <button @click="runSmartForge(true)" :disabled="forging" class="btn-primary text-white px-5 py-2.5 rounded-lg text-sm font-bold disabled:opacity-50">FORGE ONLY</button>
+          <button @click="previewSmartForge()" class="btn-secondary text-white px-5 py-2.5 rounded-lg text-sm font-bold">PREVIEW</button>
+        </div>
+      </div>
+      <div class="log-area h-40" x-text="smartForgeLog||'Select occupation and click FORGE'"></div>
+    </div>
+  </div>
+
+  <!-- PROFILES -->
+  <div x-show="genesisTab==='Profiles'">
+    <div class="flex items-center justify-between mb-4"><h3 class="text-sm font-semibold text-cyan-400">FORGED PROFILES</h3><button @click="loadProfiles()" class="text-xs text-gray-400 hover:text-white">Refresh</button></div>
+    <div x-show="!profiles.length" class="grp text-sm text-gray-500">No profiles. Go to Forge tab.</div>
+    <div class="space-y-2">
+      <template x-for="p in profiles" :key="p.id">
+        <div class="grp flex items-center gap-4">
+          <div class="w-10 h-10 rounded-full bg-gradient-to-br from-purple-600 to-cyan-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0" x-text="(p.persona_name||'?')[0]"></div>
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-semibold text-white" x-text="p.persona_name||p.id"></div>
+            <div class="text-[11px] text-gray-500" x-text="(p.persona_email||'')+' &#183; '+(p.country||'')+' &#183; '+(p.age_days||0)+'d &#183; '+(p.archetype||'')"></div>
+            <div class="text-[10px] text-gray-600 mt-0.5" x-text="p.stats?'C:'+p.stats.contacts+' Calls:'+p.stats.call_logs+' SMS:'+p.stats.sms+' Cook:'+p.stats.cookies+' Hist:'+p.stats.history+' Pho:'+p.stats.gallery:''"></div>
+          </div>
+          <div class="flex gap-2 flex-shrink-0 items-center">
+            <select x-model="p._injectDev" class="inp inp-sm w-36"><option value="">Device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id"></option></template></select>
+            <button @click="injectProfile(p.id,p._injectDev)" class="px-3 py-1.5 bg-purple-900/50 text-purple-400 rounded-lg text-xs hover:bg-purple-900">Inject</button>
+            <button @click="deleteProfile(p.id)" class="px-2 py-1.5 bg-red-900/50 text-red-400 rounded-lg text-xs hover:bg-red-900">&times;</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- INJECT -->
+  <div x-show="genesisTab==='Inject'">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="grp glow">
+        <h3 class="grp-title text-purple-400">Inject Profile Into Device</h3>
+        <div class="space-y-3">
+          <div><label class="lbl">Target Device</label><select x-model="inject.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ('+presetName(d.config?.model)+') &#8212; '+d.state"></option></template></select></div>
+          <div><label class="lbl">Profile</label><select x-model="inject.profile_id" class="inp"><option value="">Select profile...</option><template x-for="p in profiles" :key="p.id"><option :value="p.id" x-text="(p.persona_name||p.id)+' ('+(p.country||'')+', '+(p.age_days||0)+'d)'"></option></template></select></div>
+          <div class="grid grid-cols-3 gap-3"><div><label class="lbl">CC Number</label><input type="text" x-model="inject.cc" placeholder="Card number" class="inp"></div><div><label class="lbl">Expiry</label><input type="text" x-model="inject.cc_exp" placeholder="MM/YYYY" class="inp"></div><div><label class="lbl">CVV</label><input type="text" x-model="inject.cc_cvv" placeholder="CVV" class="inp"></div></div>
+          <div><label class="lbl">Cardholder Name</label><input type="text" x-model="inject.cc_name" placeholder="Name on card" class="inp"></div>
+          <div class="grid grid-cols-2 gap-3"><div><label class="lbl">App Bundle</label><select x-model="inject.bundle" class="inp"><option value="us_standard">US Standard</option><option value="us_financial">US Financial</option><option value="gb_standard">GB Standard</option></select></div><div><label class="lbl">Age Days</label><input type="number" x-model.number="inject.age_days" min="0" max="900" class="inp"></div></div>
+          <button @click="runInject()" :disabled="injecting" class="btn-purple text-white px-6 py-3 rounded-lg text-sm font-bold w-full disabled:opacity-50"><span x-show="!injecting">INJECT INTO DEVICE</span><span x-show="injecting">Injecting...</span></button>
+        </div>
+      </div>
+      <div>
+        <div class="grp mb-4">
+          <h3 class="grp-title text-cyan-400">Trust Score</h3>
+          <div x-show="!trustScore" class="text-sm text-gray-500">Run injection to see trust score</div>
+          <div x-show="trustScore">
+            <div class="flex items-center gap-4 mb-3">
+              <div class="score-ring w-16 h-16 text-lg" :class="(trustScore?.trust_score||0)>=80?'bg-green-900/50 text-green-400 border-2 border-green-700':(trustScore?.trust_score||0)>=50?'bg-yellow-900/50 text-yellow-400 border-2 border-yellow-700':'bg-red-900/50 text-red-400 border-2 border-red-700'" x-text="(trustScore?.trust_score||0)+'%'"></div>
+              <div><div class="text-sm font-bold text-white" x-text="'Grade: '+(trustScore?.grade||'&#8212;')"></div></div>
+            </div>
+            <div class="space-y-1"><template x-for="(val,key) in trustScore?.checks||{}" :key="key"><div class="flex justify-between text-xs"><span class="text-gray-400" x-text="key"></span><span :class="val?'text-green-400':'text-red-400'" x-text="val?'\u2713':'\u2717'"></span></div></template></div>
+          </div>
+        </div>
+        <div class="log-area h-40" x-text="injectLog||'Select device and profile, then INJECT'"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DEVICE AGING -->
+  <div x-show="genesisTab==='Device Aging'">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="grp glow">
+        <h3 class="grp-title text-yellow-400">Device Aging Pipeline (11 phases)</h3>
+        <p class="text-[11px] text-gray-500 mb-3">Backdate timestamps, WiFi history, usage stats, bluetooth, keyboard, downloads, caches, camera.</p>
+        <div class="space-y-3">
+          <div><label class="lbl">Target Device</label><select x-model="aging.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ('+presetName(d.config?.model)+')'"></option></template></select></div>
+          <div class="grid grid-cols-2 gap-3"><div><label class="lbl">Age (days)</label><input type="number" x-model.number="aging.age_days" min="7" max="900" class="inp"></div><div><label class="lbl">Country</label><select x-model="aging.country" class="inp"><option value="US">US</option><option value="GB">GB</option><option value="DE">DE</option><option value="FR">FR</option></select></div></div>
+          <div><label class="lbl">Persona Name</label><input type="text" x-model="aging.persona" placeholder="Device owner name" class="inp"></div>
+          <button @click="runAging()" :disabled="agingRunning" class="btn-green text-black px-6 py-3 rounded-lg text-sm font-bold w-full disabled:opacity-50"><span x-show="!agingRunning">AGE DEVICE</span><span x-show="agingRunning">Aging...</span></button>
+        </div>
+      </div>
+      <div>
+        <div class="grp mb-4"><h3 class="grp-title text-yellow-400">Aging Phases</h3>
+          <div class="space-y-1 text-xs"><template x-for="(phase,i) in agingPhases" :key="i"><div class="flex items-center gap-2"><span class="w-4 text-center" x-text="phase.done?'\u2705':phase.running?'\u23F3':'\u2B1C'"></span><span class="text-gray-400" x-text="(i+1)+'. '+phase.name"></span></div></template></div>
+        </div>
+        <div class="log-area h-48" x-text="agingLog||'Select device and age, then AGE DEVICE'"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HISTORY -->
+  <div x-show="genesisTab==='History'"><div class="grp"><h3 class="grp-title text-cyan-400">Profile History</h3><div class="flex gap-2 mb-3"><template x-for="sub in ['Cookies','localStorage','Browser History','Purchases']"><button class="tab-btn px-3 py-1.5 text-xs text-gray-400" :class="historySubTab===sub?'active':''" @click="historySubTab=sub" x-text="sub"></button></template></div><div class="log-area h-64" x-text="'Select a profile to view '+historySubTab+' data'"></div></div></div>
+
+  <!-- HARDENING -->
+  <div x-show="genesisTab==='Hardening'"><div class="grp"><h3 class="grp-title text-orange-400">Hardening Layers</h3><div class="grid grid-cols-1 md:grid-cols-2 gap-3"><template x-for="layer in hardeningLayers" :key="layer.key"><div class="flex items-center justify-between bg-[#1e293b] rounded-lg p-3"><div><div class="text-sm text-white" x-text="layer.name"></div><div class="text-[10px] text-gray-500" x-text="layer.desc"></div></div><button @click="layer.active=!layer.active" class="text-xs px-2 py-1 rounded" :class="layer.active?'bg-green-900/50 text-green-400':'bg-gray-700 text-gray-400'" x-text="layer.active?'ON':'OFF'"></button></div></template></div></div></div>
+
+  <!-- STUB GENESIS -->
+  <template x-for="tab in ['Cookies','Vault','Target','Results']"><div x-show="genesisTab===tab"><div class="grp"><div class="grp-title text-cyan-400" x-text="tab"></div><div class="text-sm text-gray-500" x-text="'Genesis &#8594; '+tab"></div></div></div></template>
+</div>
+
+<!-- CERBERUS -->
+<div x-show="section==='cerberus'" x-cloak>
+  <div class="flex gap-1 border-b border-gray-800 mb-4 flex-wrap">
+    <template x-for="tab in ['Validate','Batch','Routing','Vault','Analytics','Intelligence','Connectors','BIN Testing']">
+      <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="cerberusTab===tab?'active':''" @click="cerberusTab=tab" x-text="tab"></button>
+    </template>
+  </div>
+  <div x-show="cerberusTab==='Validate'">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="space-y-4">
+        <div class="grp glow">
+          <h3 class="grp-title text-cyan-400">Card Input</h3>
+          <div class="mb-3"><label class="lbl">Card (PAN|MM|YY|CVV)</label><input type="text" x-model="cerberus.card_input" placeholder="PAN|MM|YY|CVV" class="inp font-mono text-lg" @keydown.enter="validateCard()"></div>
+          <div class="grid grid-cols-2 gap-3 mb-3">
+            <div><label class="lbl">Gateway</label><select x-model="cerberus.gateway" class="inp"><option value="auto">Auto (Hyperswitch + PSP)</option><option value="hyperswitch">Hyperswitch Only</option><option value="stripe">Stripe</option><option value="braintree">Braintree</option><option value="adyen">Adyen</option></select></div>
+            <div class="flex items-end pb-1"><label class="flex items-center gap-2 text-xs text-gray-400"><input type="checkbox" x-model="cerberus.silent" class="rounded"> Silent Mode</label></div>
+          </div>
+          <div class="flex gap-3">
+            <button @click="validateCard()" :disabled="cerberus.validating" class="btn-primary text-white px-6 py-3 rounded-lg text-sm font-bold flex-1 disabled:opacity-50"><span x-show="!cerberus.validating">VALIDATE CARD</span><span x-show="cerberus.validating">Validating...</span></button>
+            <button @click="clearCard()" class="btn-secondary text-white px-4 py-3 rounded-lg text-sm">CLEAR</button>
+          </div>
+        </div>
+        <div class="grp text-center">
+          <div class="text-6xl mb-2" x-text="cerberus.traffic_light||'\u26AA'"></div>
+          <div class="text-xl font-bold mb-1" :class="cerberus.status==='LIVE'?'text-green-400':cerberus.status==='DEAD'?'text-red-400':'text-yellow-400'" x-text="cerberus.status||'Ready'"></div>
+          <div class="text-xs text-gray-500" x-text="cerberus.message||'Enter a card to validate'"></div>
+        </div>
+      </div>
+      <div class="space-y-4">
+        <div class="grp">
+          <h3 class="grp-title text-cyan-400">Validation Details</h3>
+          <div class="space-y-2 text-xs">
+            <template x-for="field in ['card','network','bank','country','risk_score','gateways','decline','action','bypass']" :key="field">
+              <div class="flex justify-between"><span class="text-gray-500 font-semibold capitalize" x-text="field.replace('_',' ')"></span><span class="text-white" x-text="cerberus.details?.[field]||'\u2014'"></span></div>
+            </template>
+          </div>
+        </div>
+        <div class="grp"><h3 class="grp-title text-purple-400">Card Intelligence</h3><div class="log-area h-40" x-text="cerberus.intel||'Validate a card to see intelligence'"></div></div>
+      </div>
+    </div>
+  </div>
+  <div x-show="cerberusTab==='Batch'">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="grp glow">
+        <h3 class="grp-title text-cyan-400">Bulk Card Processing</h3>
+        <div class="mb-3"><label class="lbl">Cards (one per line)</label><textarea x-model="cerberus.batch_input" rows="8" placeholder="PAN|MM|YY|CVV" class="inp font-mono text-xs"></textarea></div>
+        <div class="flex gap-3"><button @click="batchValidate()" :disabled="cerberus.batch_running" class="btn-primary text-white px-6 py-2 rounded-lg text-sm font-bold disabled:opacity-50"><span x-show="!cerberus.batch_running">PROCESS BATCH</span><span x-show="cerberus.batch_running">Processing...</span></button><span class="text-xs text-gray-500 self-center" x-text="cerberus.batch_progress||''"></span></div>
+      </div>
+      <div class="grp">
+        <h3 class="grp-title text-cyan-400">Results</h3>
+        <div class="overflow-x-auto"><table class="w-full text-xs"><thead><tr class="text-gray-500 border-b border-gray-800"><th class="text-left py-1">Card</th><th>Status</th><th>Network</th><th>Bank</th></tr></thead><tbody>
+          <template x-for="r in cerberus.batch_results" :key="r.card"><tr class="border-b border-gray-800/50"><td class="py-1 font-mono text-gray-400" x-text="r.card"></td><td :class="r.status==='LIVE'?'text-green-400':'text-red-400'" x-text="r.status"></td><td class="text-gray-400" x-text="r.network"></td><td class="text-gray-400" x-text="r.bank"></td></tr></template>
+        </tbody></table></div>
+      </div>
+    </div>
+  </div>
+  <div x-show="cerberusTab==='Intelligence'">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="grp glow">
+        <h3 class="grp-title text-purple-400">BIN Intelligence</h3>
+        <div class="mb-3"><label class="lbl">BIN (first 6-8 digits)</label><input type="text" x-model="cerberus.bin_input" placeholder="First 6-8 digits" class="inp font-mono" maxlength="8"></div>
+        <div class="flex gap-3 mb-3">
+          <button @click="lookupBin()" class="btn-purple text-white px-4 py-2 rounded-lg text-xs font-bold">LOOKUP BIN</button>
+          <button @click="predict3ds()" class="btn-secondary text-white px-4 py-2 rounded-lg text-xs font-bold">3DS PREDICT</button>
+          <button @click="maxDrain()" class="btn-secondary text-white px-4 py-2 rounded-lg text-xs font-bold">MAXDRAIN</button>
+        </div>
+        <div class="log-area h-48" x-text="cerberus.bin_result||'Enter a BIN to lookup'"></div>
+      </div>
+      <div class="space-y-4">
+        <div class="grp"><h3 class="grp-title text-cyan-400">AVS Pre-Check</h3><div class="text-xs text-gray-500">Enter billing address to validate AVS</div></div>
+        <div class="grp"><h3 class="grp-title text-orange-400">OSINT Checklist</h3><div class="text-xs text-gray-500">Card holder verification points</div></div>
+      </div>
+    </div>
+  </div>
+  <template x-for="tab in ['Routing','Vault','Analytics','Connectors','BIN Testing']"><div x-show="cerberusTab===tab"><div class="grp"><div class="grp-title text-cyan-400" x-text="tab"></div><div class="text-sm text-gray-500" x-text="'Cerberus \u2192 '+tab"></div></div></div></template>
+</div>
+
+<!-- KYC / DEEPFAKE -->
+<div x-show="section==='kyc'" x-cloak>
+  <div class="flex gap-1 border-b border-gray-800 mb-4">
+    <template x-for="tab in ['Android Device','Camera & Face','KYC Flow','Voice','Log']">
+      <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="kycTab===tab?'active':''" @click="kycTab=tab" x-text="tab"></button>
+    </template>
+  </div>
+  <div x-show="kycTab==='Android Device'">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="grp">
+        <h3 class="grp-title text-cyan-400">Device Screen</h3>
+        <div class="mb-3"><label class="lbl">Device</label><select x-model="kyc.device_id" class="inp" @change="kyc.device_id&&startKycStream(kyc.device_id)"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ('+presetName(d.config?.model)+')'"></option></template></select></div>
+        <div class="bg-black rounded-lg flex items-center justify-center" style="height:400px"><canvas id="kycCanvas" width="270" height="400" class="max-w-full max-h-full"></canvas></div>
+        <div class="flex justify-center gap-4 py-2">
+          <button @click="kycAdbInput('back')" class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25C0 Back</button>
+          <button @click="kycAdbInput('home')" class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25CF Home</button>
+          <button @click="kycAdbInput('recents')" class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25B6 Recents</button>
+        </div>
+      </div>
+      <div class="space-y-4">
+        <div class="grp">
+          <h3 class="grp-title text-cyan-400">Device Info</h3>
+          <template x-for="d in devices.filter(d=>d.id===kyc.device_id)" :key="d.id">
+            <div class="space-y-1 text-xs">
+              <div class="flex justify-between"><span class="text-gray-500">Model</span><span class="text-white" x-text="presetName(d.config?.model)"></span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Carrier</span><span class="text-white" x-text="(d.config?.carrier||'').replace('_',' ')"></span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Country</span><span class="text-white" x-text="d.config?.country"></span></div>
+              <div class="flex justify-between"><span class="text-gray-500">ADB</span><span class="text-white font-mono" x-text="d.adb_target"></span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Stealth</span><span class="text-white" x-text="d.stealth_score+'%'"></span></div>
+            </div>
+          </template>
+        </div>
+        <div class="grp">
+          <h3 class="grp-title text-green-400">Spoof Controls</h3>
+          <div class="grid grid-cols-3 gap-3 mb-3">
+            <div><label class="lbl">Preset</label><select x-model="kyc.spoof_preset" class="inp"><template x-for="p in presets" :key="p.key"><option :value="p.key" x-text="p.name"></option></template></select></div>
+            <div><label class="lbl">Carrier</label><select x-model="kyc.spoof_carrier" class="inp"><template x-for="(c,key) in carriers" :key="key"><option :value="key" x-text="c.name"></option></template></select></div>
+            <div><label class="lbl">Location</label><select x-model="kyc.spoof_location" class="inp"><template x-for="(loc,key) in locations" :key="key"><option :value="key" x-text="key.toUpperCase()"></option></template></select></div>
+          </div>
+          <button @click="kycPatch()" class="btn-primary text-white px-4 py-2 rounded-lg text-xs font-bold">APPLY SPOOF</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div x-show="kycTab==='Camera & Face'">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="grp glow">
+        <h3 class="grp-title text-cyan-400">Face Upload</h3>
+        <div class="mb-3"><label class="lbl">Device</label><select x-model="kyc.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id"></option></template></select></div>
+        <div class="mb-3"><label class="lbl">Face Image</label><input type="file" @change="uploadFace($event)" accept="image/*" class="inp text-xs"></div>
+        <div class="flex gap-3">
+          <button @click="startDeepfake()" class="btn-green text-black px-4 py-2 rounded-lg text-xs font-bold">START DEEPFAKE</button>
+          <button @click="stopDeepfake()" class="btn-danger text-white px-4 py-2 rounded-lg text-xs font-bold">STOP</button>
+          <button @click="deepfakeStatus()" class="btn-secondary text-white px-4 py-2 rounded-lg text-xs font-bold">STATUS</button>
+        </div>
+      </div>
+      <div class="grp">
+        <h3 class="grp-title text-green-400">GPU Status</h3>
+        <div class="space-y-1 text-xs">
+          <div class="flex justify-between"><span class="text-gray-500">GPU Ready</span><span :class="kyc.gpu_ready?'text-green-400':'text-red-400'" x-text="kyc.gpu_ready?'Yes':'No'"></span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Face Loaded</span><span :class="kyc.face_loaded?'text-green-400':'text-red-400'" x-text="kyc.face_loaded?'Yes':'No'"></span></div>
+          <div class="flex justify-between"><span class="text-gray-500">Deepfake Active</span><span :class="kyc.df_active?'text-green-400':'text-red-400'" x-text="kyc.df_active?'Yes':'No'"></span></div>
+        </div>
+        <div class="log-area h-32 mt-3" x-text="kyc.log||'Upload face and start deepfake'"></div>
+      </div>
+    </div>
+  </div>
+  <template x-for="tab in ['KYC Flow','Voice','Log']"><div x-show="kycTab===tab"><div class="grp"><div class="grp-title text-cyan-400" x-text="tab"></div><div class="text-sm text-gray-500" x-text="'KYC \u2192 '+tab"></div></div></div></template>
+</div>
+
+<!-- INTELLIGENCE -->
+<div x-show="section==='intel'" x-cloak>
+  <div class="flex gap-1 border-b border-gray-800 mb-4">
+    <template x-for="tab in ['AI Copilot','3DS Strategy','Detection','Recon','Memory','OSINT','Target Discovery','Dark Web']">
+      <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="intelTab===tab?'active':''" @click="intelTab=tab" x-text="tab"></button>
+    </template>
+  </div>
+  <div x-show="intelTab==='AI Copilot'">
+    <div class="grp glow">
+      <h3 class="grp-title text-cyan-400">AI Copilot</h3>
+      <div class="log-area h-64 mb-3" x-text="intel.copilot_log||'Ask anything about operations, strategy, or targets.'"></div>
+      <div class="flex gap-3"><input type="text" x-model="intel.copilot_query" placeholder="Ask the AI copilot..." class="inp flex-1" @keydown.enter="askCopilot()"><button @click="askCopilot()" class="btn-primary text-white px-6 py-2 rounded-lg text-sm font-bold">ASK</button></div>
+    </div>
+  </div>
+  <div x-show="intelTab==='Recon'">
+    <div class="grp glow">
+      <h3 class="grp-title text-cyan-400">Target Recon</h3>
+      <div class="grid grid-cols-2 gap-3 mb-3"><div><label class="lbl">Domain</label><input type="text" x-model="intel.recon_domain" placeholder="example.com" class="inp"></div><div><label class="lbl">Type</label><select x-model="intel.recon_type" class="inp"><option value="full">Full</option><option value="waf">WAF</option><option value="ssl">SSL</option><option value="dns">DNS</option></select></div></div>
+      <button @click="runRecon()" class="btn-primary text-white px-6 py-2 rounded-lg text-sm font-bold">RUN RECON</button>
+      <div class="log-area h-48 mt-3" x-text="intel.recon_log||'Enter domain and run recon'"></div>
+    </div>
+  </div>
+  <template x-for="tab in ['3DS Strategy','Detection','Memory','OSINT','Target Discovery','Dark Web']"><div x-show="intelTab===tab"><div class="grp"><div class="grp-title text-cyan-400" x-text="tab"></div><div class="text-sm text-gray-500" x-text="'Intelligence \u2192 '+tab"></div></div></div></template>
+</div>
+
+<!-- NETWORK -->
+<div x-show="section==='network'" x-cloak>
+  <div class="flex gap-1 border-b border-gray-800 mb-4">
+    <template x-for="tab in ['Mullvad VPN','Network Shield','Forensic','Proxy/DNS','Antidetect']">
+      <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="networkTab===tab?'active':''" @click="networkTab=tab" x-text="tab"></button>
+    </template>
+  </div>
+  <div x-show="networkTab==='Mullvad VPN'">
+    <div class="grp glow">
+      <h3 class="grp-title text-cyan-400">Mullvad VPN</h3>
+      <div class="grid grid-cols-3 gap-4 mb-4">
+        <div class="grp"><div class="text-xs text-gray-500">Status</div><div class="text-lg font-bold" :class="network.vpn_connected?'text-green-400':'text-red-400'" x-text="network.vpn_connected?'Connected':'Disconnected'"></div></div>
+        <div class="grp"><div class="text-xs text-gray-500">Server</div><div class="text-sm text-white" x-text="network.vpn_server||'\u2014'"></div></div>
+        <div class="grp"><div class="text-xs text-gray-500">IP</div><div class="text-sm text-white font-mono" x-text="network.vpn_ip||'\u2014'"></div></div>
+      </div>
+      <div class="flex gap-3">
+        <button @click="vpnConnect()" class="btn-green text-black px-4 py-2 rounded-lg text-xs font-bold">CONNECT</button>
+        <button @click="vpnDisconnect()" class="btn-danger text-white px-4 py-2 rounded-lg text-xs font-bold">DISCONNECT</button>
+        <button @click="vpnStatus()" class="btn-secondary text-white px-4 py-2 rounded-lg text-xs font-bold">STATUS</button>
+      </div>
+    </div>
+  </div>
+  <template x-for="tab in ['Network Shield','Forensic','Proxy/DNS','Antidetect']"><div x-show="networkTab===tab"><div class="grp"><div class="grp-title text-cyan-400" x-text="tab"></div><div class="text-sm text-gray-500" x-text="'Network \u2192 '+tab"></div></div></div></template>
+</div>
+
+<!-- TARGETS -->
+<div x-show="section==='targets'" x-cloak>
+  <div class="flex gap-1 border-b border-gray-800 mb-4">
+    <template x-for="tab in ['Analyze','Database','Discover','Subdomains','WAF','SSL','DNS & Email','Headers','Score','Batch']">
+      <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="targetsTab===tab?'active':''" @click="targetsTab=tab" x-text="tab"></button>
+    </template>
+  </div>
+  <div x-show="targetsTab==='Analyze'">
+    <div class="grp glow">
+      <h3 class="grp-title text-cyan-400">Target Analysis</h3>
+      <div class="grid grid-cols-2 gap-3 mb-3"><div><label class="lbl">Target URL</label><input type="text" x-model="targets.url" placeholder="https://example.com" class="inp"></div><div><label class="lbl">Depth</label><select x-model="targets.depth" class="inp"><option value="basic">Basic</option><option value="full">Full</option><option value="deep">Deep</option></select></div></div>
+      <button @click="analyzeTarget()" class="btn-primary text-white px-6 py-2 rounded-lg text-sm font-bold">ANALYZE</button>
+      <div class="log-area h-48 mt-3" x-text="targets.log||'Enter target URL and analyze'"></div>
+    </div>
+  </div>
+  <template x-for="tab in ['Database','Discover','Subdomains','WAF','SSL','DNS & Email','Headers','Score','Batch']"><div x-show="targetsTab===tab"><div class="grp"><div class="grp-title text-cyan-400" x-text="tab"></div><div class="text-sm text-gray-500" x-text="'Targets \u2192 '+tab"></div></div></div></template>
+</div>
+
+<!-- ADMIN -->
+<div x-show="section==='admin'" x-cloak>
+  <div class="flex gap-1 border-b border-gray-800 mb-4">
+    <template x-for="tab in ['Services','Tools','System','Automation','Diagnostics','Dashboard']">
+      <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="adminTab===tab?'active':''" @click="adminTab=tab" x-text="tab"></button>
+    </template>
+  </div>
+  <div x-show="adminTab==='Services'">
+    <div class="grp glow">
+      <h3 class="grp-title text-cyan-400">Service Status</h3>
+      <div class="space-y-2" x-show="admin.services.length"><template x-for="svc in admin.services" :key="svc.name"><div class="flex items-center justify-between bg-[#1e293b] rounded-lg p-3"><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full" :class="svc.active?'bg-green-500':'bg-red-500'"></span><span class="text-sm text-white" x-text="svc.name"></span></div><span class="text-xs" :class="svc.active?'text-green-400':'text-red-400'" x-text="svc.active?'Active':'Stopped'"></span></div></template></div>
+      <button @click="loadServices()" class="btn-primary text-white px-4 py-2 rounded-lg text-xs font-bold mt-3">REFRESH</button>
+    </div>
+  </div>
+  <div x-show="adminTab==='System'">
+    <div class="grp glow">
+      <h3 class="grp-title text-cyan-400">System Health</h3>
+      <div class="grid grid-cols-3 gap-4">
+        <div class="grp"><div class="text-xs text-gray-500">CPU</div><div class="text-lg font-bold text-cyan-400" x-text="admin.health?.cpu||'\u2014'"></div></div>
+        <div class="grp"><div class="text-xs text-gray-500">Memory</div><div class="text-lg font-bold text-yellow-400" x-text="admin.health?.memory||'\u2014'"></div></div>
+        <div class="grp"><div class="text-xs text-gray-500">Disk</div><div class="text-lg font-bold text-green-400" x-text="admin.health?.disk||'\u2014'"></div></div>
+      </div>
+      <button @click="loadHealth()" class="btn-primary text-white px-4 py-2 rounded-lg text-xs font-bold mt-3">REFRESH</button>
+    </div>
+  </div>
+  <template x-for="tab in ['Tools','Automation','Diagnostics','Dashboard']"><div x-show="adminTab===tab"><div class="grp"><div class="grp-title text-cyan-400" x-text="tab"></div><div class="text-sm text-gray-500" x-text="'Admin \u2192 '+tab"></div></div></div></template>
+</div>
+
+<!-- AI TASKS -->
+<div x-show="section==='ai'" x-cloak>
+  <div class="flex gap-1 border-b border-gray-800 mb-4">
+    <template x-for="tab in ['Tasks','Metrics','Providers','Testing']">
+      <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="aiTab===tab?'active':''" @click="aiTab=tab" x-text="tab"></button>
+    </template>
+  </div>
+  <div x-show="aiTab==='Tasks'">
+    <div class="grp glow">
+      <h3 class="grp-title text-cyan-400">Agent Task Launcher</h3>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <div><label class="lbl">Device</label><select x-model="aiTasks.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ('+presetName(d.config?.model)+')'"></option></template></select></div>
+        <div><label class="lbl">Template</label><select x-model="aiTasks.template" class="inp"><template x-for="t in aiTasks.templates" :key="t.id"><option :value="t.id" x-text="t.name"></option></template></select></div>
+      </div>
+      <div class="mb-3"><label class="lbl">Task Prompt</label><textarea x-model="aiTasks.prompt" rows="3" placeholder="Describe the task..." class="inp text-xs"></textarea></div>
+      <div class="flex gap-3">
+        <button @click="startAiTask()" class="btn-green text-black px-4 py-2 rounded-lg text-xs font-bold">START TASK</button>
+        <button @click="stopAiTask()" class="btn-danger text-white px-4 py-2 rounded-lg text-xs font-bold">STOP</button>
+      </div>
+      <div class="log-area h-40 mt-3" x-text="aiTasks.log||'Select device and template, then start'"></div>
+    </div>
+  </div>
+  <template x-for="tab in ['Metrics','Providers','Testing']"><div x-show="aiTab===tab"><div class="grp"><div class="grp-title text-cyan-400" x-text="tab"></div><div class="text-sm text-gray-500" x-text="'AI Tasks \u2192 '+tab"></div></div></div></template>
+</div>
+
+<!-- SETTINGS -->
+<div x-show="section==='settings'" x-cloak>
+  <div class="flex gap-1 border-b border-gray-800 mb-4 flex-wrap">
+    <template x-for="tab in ['VPN','AI','Services','Browser','API Keys','System','Hyperswitch','Proxy','Android']">
+      <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="settingsTab===tab?'active':''" @click="settingsTab=tab" x-text="tab"></button>
+    </template>
+  </div>
+  <div class="grp"><div class="grp-title text-cyan-400" x-text="settingsTab"></div><div class="text-sm text-gray-500" x-text="'Settings \u2192 '+settingsTab+' \u2014 Connected to core modules'"></div></div>
+</div>
+
+</div><!-- /content -->
+</main>
+
+<!-- DEVICE SCREEN MODAL -->
+<div x-show="showScreen" x-cloak class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center" @click.self="showScreen=false">
+  <div class="bg-[#111827] rounded-2xl border border-gray-700 overflow-hidden w-[420px]">
+    <div class="flex items-center justify-between px-4 py-2 border-b border-gray-800">
+      <span class="text-sm text-cyan-400" x-text="screenDevice?.id||''"></span>
+      <div class="flex gap-2"><a :href="'/scrcpy/'" target="_blank" class="text-xs text-gray-400 hover:text-white px-2 py-1 bg-[#1e293b] rounded">HD Stream</a><button @click="showScreen=false" class="text-gray-400 hover:text-white text-lg">&times;</button></div>
+    </div>
+    <div class="bg-black flex items-center justify-center" style="height:600px"><canvas id="screenCanvas" width="540" height="600" class="max-w-full max-h-full"></canvas></div>
+    <div class="flex justify-center gap-4 py-2 border-t border-gray-800">
+      <button class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25C0 Back</button>
+      <button class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25CF Home</button>
+      <button class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25B6 Recents</button>
+    </div>
+  </div>
+</div>
+
 <script>
 function titanConsole() {
   return {
     section: 'dashboard',
-    devices: [],
-    presets: [],
-    carriers: {},
-    locations: {},
-    creating: false,
-    showScreen: false,
-    screenDevice: null,
-    screenWs: null,
-    genesisTab: 'Forge',
-    profiles: [],
-    forging: false,
-    forgeResult: null,
-    forgeForm: { name: '', email: '', country: 'US', archetype: 'professional', age_days: 90, carrier: 'tmobile_us', location: 'nyc', device_model: 'samsung_s25_ultra' },
-    intelTab: 'AI Copilot',
-    networkTab: 'Mullvad VPN',
-    cerberusTab: 'Validate',
-    targetsTab: 'Analyze',
-    kycTab: 'Android Device',
-    adminTab: 'Services',
-    aiTab: 'Tasks',
-    settingsTab: 'VPN',
+    devices: [], presets: [], carriers: {}, locations: {}, profiles: [],
+    creating: false, showScreen: false, screenDevice: null, screenWs: null,
+    forging: false, forgeResult: null, forgeLog: '', osintLog: '', osintResult: null,
+    smartForgeLog: '', injecting: false, injectLog: '', trustScore: null,
+    agingRunning: false, agingLog: '', historySubTab: 'Cookies',
+    kycWs: null,
 
     newDevice: { model: 'samsung_s25_ultra', country: 'US', carrier: 'tmobile_us', location: 'nyc' },
 
+    genesisTab: 'Forge', cerberusTab: 'Validate', kycTab: 'Android Device',
+    intelTab: 'AI Copilot', networkTab: 'Mullvad VPN', targetsTab: 'Analyze',
+    adminTab: 'Services', aiTab: 'Tasks', settingsTab: 'VPN',
+
+    forge: { name:'',gender:'auto',country:'US',dob:'',ssn:'',phone:'',street:'',city:'',state:'',zip:'',cc:'',cc_exp:'',cc_cvv:'',email:'',target:'',occupation:'auto',use_ai:true,proxy:'',proxy_status:'',osint_name:'',osint_email:'',osint_username:'',osint_phone:'',osint_instagram:'',osint_domain:'',osint_location:'',device_id:'',age_days:90,device_model:'samsung_s25_ultra',carrier:'tmobile_us',location:'nyc' },
+    smartForge: { occupation:'auto',country:'US',age:28,gender:'auto',target_site:'',age_days:90,use_ai:true,name:'',email:'',dob:'',ssn:'',phone:'',street:'',city:'',state:'',zip:'',cc:'',cc_exp:'',cc_cvv:'',device_id:'' },
+    inject: { device_id:'',profile_id:'',cc:'',cc_exp:'',cc_cvv:'',cc_name:'',bundle:'us_standard',age_days:90 },
+    aging: { device_id:'',age_days:90,country:'US',persona:'' },
+    cerberus: { card_input:'',gateway:'auto',silent:false,validating:false,traffic_light:'',status:'',message:'',details:{},intel:'',batch_input:'',batch_running:false,batch_progress:'',batch_results:[],bin_input:'',bin_result:'' },
+    kyc: { device_id:'',spoof_preset:'',spoof_carrier:'',spoof_location:'',gpu_ready:false,face_loaded:false,df_active:false,log:'' },
+    intel: { copilot_query:'',copilot_log:'',recon_domain:'',recon_type:'full',recon_log:'' },
+    network: { vpn_connected:false,vpn_server:'',vpn_ip:'' },
+    targets: { url:'',depth:'basic',log:'' },
+    admin: { services:[],health:{} },
+    aiTasks: { device_id:'',template:'',prompt:'',templates:[],log:'' },
+
+    agingPhases: [
+      {name:'System Settings',done:false,running:false},{name:'Filesystem Timestamps',done:false,running:false},
+      {name:'WiFi History',done:false,running:false},{name:'Usage Stats',done:false,running:false},
+      {name:'Package Manager',done:false,running:false},{name:'Bluetooth Pairs',done:false,running:false},
+      {name:'Keyboard Dictionary',done:false,running:false},{name:'Notification Policy',done:false,running:false},
+      {name:'Downloads Folder',done:false,running:false},{name:'App Caches',done:false,running:false},
+      {name:'Camera DCIM',done:false,running:false}
+    ],
+
+    hardeningLayers: [
+      {key:'canvas',name:'Canvas Noise',desc:'Randomize canvas fingerprint',active:true},
+      {key:'webgl',name:'WebGL Spoof',desc:'Override WebGL renderer/vendor',active:true},
+      {key:'tls',name:'TLS Parrot',desc:'Mimic browser TLS fingerprint',active:true},
+      {key:'fonts',name:'Font Masking',desc:'Limit exposed system fonts',active:true},
+      {key:'timezone',name:'Timezone Lock',desc:'Lock to proxy timezone',active:true},
+      {key:'webrtc',name:'WebRTC Leak Protection',desc:'Block WebRTC IP leak',active:true},
+      {key:'battery',name:'Battery API',desc:'Spoof battery status',active:false},
+      {key:'screen',name:'Screen Resolution',desc:'Override screen metrics',active:false},
+      {key:'audio',name:'AudioContext',desc:'Randomize audio fingerprint',active:true},
+      {key:'gpu',name:'GPU Info',desc:'Override GPU renderer string',active:true}
+    ],
+
     navItems: [
-      { key: 'dashboard', label: 'Dashboard', icon: '📊', desc: 'Device fleet overview', badge: '' },
-      { key: 'devices', label: 'Devices', icon: '📱', desc: 'Create & manage Android devices', badge: '' },
-      { key: 'genesis', label: 'Genesis Forge', icon: '💎', desc: '18-stage profile forge + inject', badge: '11' },
-      { key: 'intel', label: 'Intelligence', icon: '🧠', desc: 'AI copilot + dark web search', badge: '7' },
-      { key: 'network', label: 'Network', icon: '🔒', desc: 'VPN, shield, proxy, forensic', badge: '4' },
-      { key: 'cerberus', label: 'Cerberus', icon: '💳', desc: 'Card validation + BIN testing', badge: '8' },
-      { key: 'targets', label: 'Targets', icon: '🎯', desc: 'OSINT reconnaissance + scoring', badge: '10' },
-      { key: 'kyc', label: 'KYC / Deepfake', icon: '📷', desc: 'Camera inject + face swap', badge: '5' },
-      { key: 'admin', label: 'Admin', icon: '🛠️', desc: 'Services + diagnostics', badge: '6' },
-      { key: 'ai', label: 'AI Tasks', icon: '🤖', desc: 'Task routing + metrics', badge: '4' },
-      { key: 'settings', label: 'Settings', icon: '⚙️', desc: 'System configuration', badge: '9' },
+      {key:'dashboard',label:'Dashboard',icon:'\ud83d\udcca',desc:'Device fleet overview',badge:''},
+      {key:'devices',label:'Devices',icon:'\ud83d\udcf1',desc:'Create & manage devices',badge:''},
+      {key:'genesis',label:'Genesis Studio',icon:'\ud83d\udc8e',desc:'Profile forge + inject',badge:'11'},
+      {key:'intel',label:'Intelligence',icon:'\ud83e\udde0',desc:'AI copilot + recon',badge:'8'},
+      {key:'network',label:'Network',icon:'\ud83d\udd12',desc:'VPN + proxy + forensic',badge:'5'},
+      {key:'cerberus',label:'Cerberus',icon:'\ud83d\udcb3',desc:'Card validation + BIN',badge:'8'},
+      {key:'targets',label:'Targets',icon:'\ud83c\udfaf',desc:'OSINT + scoring',badge:'10'},
+      {key:'kyc',label:'KYC / Deepfake',icon:'\ud83d\udcf7',desc:'Camera + face swap',badge:'5'},
+      {key:'admin',label:'Admin',icon:'\ud83d\udee0\ufe0f',desc:'Services + diagnostics',badge:'6'},
+      {key:'ai',label:'AI Tasks',icon:'\ud83e\udd16',desc:'Task routing',badge:'4'},
+      {key:'settings',label:'Settings',icon:'\u2699\ufe0f',desc:'Configuration',badge:'9'}
     ],
 
     get currentNav() { return this.navItems.find(n => n.key === this.section); },
-    get avgScore() {
-      if (!this.devices.length) return 0;
-      return Math.round(this.devices.reduce((s, d) => s + (d.stealth_score || 0), 0) / this.devices.length);
-    },
+    get avgScore() { if(!this.devices.length)return 0; return Math.round(this.devices.reduce((s,d)=>s+(d.stealth_score||0),0)/this.devices.length); },
 
     async init() {
       await this.loadPresets();
-      await this.loadDevices();
-      await this.loadProfiles();
-      setInterval(() => this.loadDevices(), 10000);
+      await Promise.all([this.loadDevices(), this.loadProfiles()]);
+      this.loadServices(); this.loadHealth(); this.loadAiTemplates();
+      setInterval(()=>this.loadDevices(),10000);
     },
 
-    async api(path, opts = {}) {
-      const res = await fetch('/api' + path, { headers: {'Content-Type': 'application/json'}, ...opts });
-      return res.json();
+    async api(path, opts={}) {
+      const r = await fetch('/api'+path, {headers:{'Content-Type':'application/json'}, ...opts});
+      if(!r.ok) throw new Error(await r.text());
+      return r.json();
     },
 
-    async loadDevices() {
-      try {
-        const data = await this.api('/devices');
-        this.devices = data.devices || [];
-      } catch(e) { console.error('Load devices failed', e); }
-    },
+    async loadDevices() { try { const d=await this.api('/devices'); this.devices=d.devices||[]; } catch(e) { console.error(e); } },
+    async loadPresets() { try { const[p,c,l]=await Promise.all([this.api('/stealth/presets'),this.api('/stealth/carriers'),this.api('/stealth/locations')]); this.presets=p.presets||[]; this.carriers=c.carriers||{}; this.locations=l.locations||{}; } catch(e) { console.error(e); } },
+    async loadProfiles() { try { const d=await this.api('/genesis/profiles'); this.profiles=(d.profiles||[]).map(p=>({...p,_injectDev:''})); } catch(e) { console.error(e); } },
+    async loadServices() { try { const d=await this.api('/admin/services'); this.admin.services=d.services||[]; } catch(e) {} },
+    async loadHealth() { try { const d=await this.api('/admin/health'); this.admin.health=d||{}; } catch(e) {} },
+    async loadAiTemplates() { try { const d=await this.api('/agent/templates'); this.aiTasks.templates=d.templates||[]; } catch(e) {} },
 
-    async loadPresets() {
-      try {
-        const [p, c, l] = await Promise.all([
-          this.api('/stealth/presets'),
-          this.api('/stealth/carriers'),
-          this.api('/stealth/locations'),
-        ]);
-        this.presets = p.presets || [];
-        this.carriers = c.carriers || {};
-        this.locations = l.locations || {};
-      } catch(e) { console.error('Load presets failed', e); }
-    },
+    presetName(key) { const p=this.presets.find(p=>p.key===key); return p?p.name:key||'Unknown'; },
 
-    presetName(key) {
-      const p = this.presets.find(p => p.key === key);
-      return p ? p.name : key || 'Unknown';
-    },
+    // Device Management
+    async createDevice() { this.creating=true; try { await this.api('/devices',{method:'POST',body:JSON.stringify(this.newDevice)}); await this.loadDevices(); } catch(e) { alert('Create failed: '+e.message); } this.creating=false; },
+    async deleteDevice(id) { if(!confirm('Destroy '+id+'?'))return; await this.api('/devices/'+id,{method:'DELETE'}); await this.loadDevices(); },
+    async patchDevice(id) { try { const r=await this.api('/stealth/'+id+'/patch',{method:'POST',body:'{}'}); alert('Patched: score='+r.score+'%'); await this.loadDevices(); } catch(e) { alert(e.message); } },
+    async auditDevice(id) { try { const r=await this.api('/stealth/'+id+'/audit'); alert('Audit: '+r.passed+'/'+r.total+' ('+r.score+'%)'); } catch(e) { alert(e.message); } },
 
-    async createDevice() {
-      this.creating = true;
-      try {
-        await this.api('/devices', {
-          method: 'POST',
-          body: JSON.stringify(this.newDevice),
-        });
-        await this.loadDevices();
-      } catch(e) { alert('Create failed: ' + e.message); }
-      this.creating = false;
-    },
-
-    async deleteDevice(id) {
-      if (!confirm('Destroy device ' + id + '? This deletes all data.')) return;
-      await this.api('/devices/' + id, { method: 'DELETE' });
-      await this.loadDevices();
-    },
-
-    async patchDevice(id) {
-      await this.api('/stealth/' + id + '/patch', { method: 'POST', body: '{}' });
-      await this.loadDevices();
-    },
-
-    async auditDevice(id) {
-      const result = await this.api('/stealth/' + id + '/audit');
-      alert('Audit: ' + result.passed + '/' + result.total + ' passed (' + result.score + '%)');
-    },
-
-    async forgeProfile() {
-      this.forging = true;
-      this.forgeResult = null;
-      try {
-        const result = await this.api('/genesis/create', { method: 'POST', body: JSON.stringify(this.forgeForm) });
-        this.forgeResult = result;
-        await this.loadProfiles();
-      } catch(e) { alert('Forge failed: ' + e.message); }
-      this.forging = false;
-    },
-
-    async loadProfiles() {
-      try {
-        const data = await this.api('/genesis/profiles');
-        this.profiles = data.profiles || [];
-      } catch(e) { console.error('Load profiles failed', e); }
-    },
-
-    async injectProfile(profileId, deviceId) {
-      if (!deviceId) { alert('Select a device first'); return; }
-      if (!confirm('Inject profile ' + profileId + ' into ' + deviceId + '? This writes contacts, calls, SMS, cookies, history, photos.')) return;
-      try {
-        const result = await this.api('/genesis/inject/' + deviceId, { method: 'POST', body: JSON.stringify({ profile_id: profileId }) });
-        alert('Injected! ' + JSON.stringify(result.result || result));
-      } catch(e) { alert('Inject failed: ' + e.message); }
-    },
-
-    async deleteProfile(profileId) {
-      if (!confirm('Delete profile ' + profileId + '?')) return;
-      await this.api('/genesis/profiles/' + profileId, { method: 'DELETE' });
-      await this.loadProfiles();
-    },
-
-    selectDevice(dev) { this.section = 'devices'; },
-
-    viewDevice(dev) {
-      this.screenDevice = dev;
-      this.showScreen = true;
-      this.startScreenStream(dev.id);
-    },
+    viewDevice(dev) { this.screenDevice=dev; this.showScreen=true; this.startScreenStream(dev.id); },
+    selectDevice(dev) { this.section='devices'; },
 
     startScreenStream(deviceId) {
-      if (this.screenWs) { this.screenWs.close(); }
-      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      this.screenWs = new WebSocket(proto + '//' + location.host + '/ws/screen/' + deviceId);
-      this.screenWs.binaryType = 'arraybuffer';
-      const canvas = document.getElementById('screenCanvas');
-      const ctx = canvas?.getContext('2d');
-      this.screenWs.onmessage = (e) => {
-        if (!ctx) return;
-        const blob = new Blob([e.data], { type: 'image/jpeg' });
-        const img = new Image();
-        img.onload = () => {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-          URL.revokeObjectURL(img.src);
+      if(this.screenWs) this.screenWs.close();
+      const proto=location.protocol==='https:'?'wss:':'ws:';
+      this.screenWs=new WebSocket(proto+'//'+location.host+'/ws/screen/'+deviceId);
+      this.screenWs.binaryType='arraybuffer';
+      const canvas=document.getElementById('screenCanvas');
+      const ctx=canvas?.getContext('2d');
+      this.screenWs.onmessage=(e)=>{
+        if(!ctx)return;
+        const blob=new Blob([e.data],{type:'image/jpeg'});
+        const img=new Image();
+        img.onload=()=>{ canvas.width=img.width; canvas.height=img.height; ctx.drawImage(img,0,0); URL.revokeObjectURL(img.src); };
+        img.src=URL.createObjectURL(blob);
+      };
+    },
+
+    // Genesis Forge
+    async forgeAndInject() { await this._runForge(true); },
+    async forgeOnly() { await this._runForge(false); },
+    async _runForge(inject) {
+      this.forging=true; this.forgeResult=null; this.forgeLog='Starting forge pipeline...\n';
+      try {
+        const body = {
+          name:this.forge.name, email:this.forge.email, phone:this.forge.phone,
+          country:this.forge.country, archetype:this.forge.occupation==='auto'?'professional':this.forge.occupation,
+          age_days:this.forge.age_days, carrier:this.forge.carrier, location:this.forge.location,
+          device_model:this.forge.device_model,
+          cc_number:this.forge.cc, cc_exp_month:parseInt((this.forge.cc_exp||'').split('/')[0])||0,
+          cc_exp_year:parseInt((this.forge.cc_exp||'').split('/')[1])||0,
+          cc_cvv:this.forge.cc_cvv, cc_cardholder:this.forge.name
         };
+        this.forgeLog+='[1/4] Forging profile...\n';
+        const r = await this.api('/genesis/create',{method:'POST',body:JSON.stringify(body)});
+        this.forgeLog+='[2/4] Profile created: '+r.profile_id+'\n';
+        this.forgeLog+='  Stats: C:'+r.stats.contacts+' Calls:'+r.stats.call_logs+' SMS:'+r.stats.sms+' Cook:'+r.stats.cookies+' Hist:'+r.stats.history+' Pho:'+r.stats.gallery+'\n';
+        this.forgeResult = r;
+        if(inject && this.forge.device_id) {
+          this.forgeLog+='[3/4] Injecting into '+this.forge.device_id+'...\n';
+          const ir = await this.api('/genesis/inject/'+this.forge.device_id,{method:'POST',body:JSON.stringify({profile_id:r.profile_id,cc_number:this.forge.cc,cc_exp:this.forge.cc_exp,cc_cvv:this.forge.cc_cvv})});
+          this.forgeLog+='[4/4] Injection complete!\n'+JSON.stringify(ir.result||ir,null,2)+'\n';
+          try { const ts=await this.api('/genesis/trust-score/'+this.forge.device_id); this.trustScore=ts; this.forgeResult.trust_score=ts.trust_score; this.forgeLog+='Trust Score: '+ts.trust_score+'%\n'; } catch(e) {}
+        } else { this.forgeLog+='[3/4] Skipped injection (no device selected)\n'; }
+        await this.loadProfiles();
+        this.forgeLog+='Done!\n';
+      } catch(e) { this.forgeLog+='ERROR: '+e.message+'\n'; }
+      this.forging=false;
+    },
+    previewProfile() { this.forgeLog='Preview:\n'+JSON.stringify(this.forge,null,2); },
+    async testProxy() { this.forge.proxy_status='Testing...'; try { const r=await this.api('/network/proxy-test',{method:'POST',body:JSON.stringify({proxy:this.forge.proxy})}); this.forge.proxy_status=r.reachable?'OK ('+r.latency_ms+'ms)':'FAILED: '+r.error; } catch(e) { this.forge.proxy_status='Error: '+e.message; } },
+    async runOsint() { this.osintLog='Running OSINT...\n'; try { const r=await this.api('/intel/recon',{method:'POST',body:JSON.stringify({domain:this.forge.osint_domain,name:this.forge.osint_name,email:this.forge.osint_email})}); this.osintResult=r; this.osintLog+=JSON.stringify(r,null,2); } catch(e) { this.osintLog+='Error: '+e.message; } },
+    applyOsint() { if(!this.osintResult)return; this.forgeLog+='Applied OSINT data to profile\n'; },
+
+    // Smart Forge
+    async runSmartForge(forgeOnly) {
+      this.forging=true; this.smartForgeLog='Running SmartForge...\n';
+      try {
+        const body = {
+          occupation:this.smartForge.occupation, country:this.smartForge.country,
+          age:this.smartForge.age, gender:this.smartForge.gender,
+          target_site:this.smartForge.target_site, age_days:this.smartForge.age_days,
+          use_ai:this.smartForge.use_ai,
+          identity_override: this.smartForge.name ? {
+            name:this.smartForge.name, email:this.smartForge.email, dob:this.smartForge.dob,
+            ssn:this.smartForge.ssn, phone:this.smartForge.phone, street:this.smartForge.street,
+            city:this.smartForge.city, state:this.smartForge.state, zip:this.smartForge.zip,
+            cc:this.smartForge.cc, cc_exp:this.smartForge.cc_exp, cc_cvv:this.smartForge.cc_cvv
+          } : null
+        };
+        const r = await this.api('/genesis/smartforge',{method:'POST',body:JSON.stringify(body)});
+        this.smartForgeLog += JSON.stringify(r,null,2)+'\n';
+        if(!forgeOnly && this.smartForge.device_id && r.profile_id) {
+          this.smartForgeLog += 'Injecting into '+this.smartForge.device_id+'...\n';
+          await this.api('/genesis/inject/'+this.smartForge.device_id,{method:'POST',body:JSON.stringify({profile_id:r.profile_id})});
+          this.smartForgeLog += 'Injection complete!\n';
+        }
+        await this.loadProfiles();
+      } catch(e) { this.smartForgeLog+='Error: '+e.message+'\n'; }
+      this.forging=false;
+    },
+    previewSmartForge() { this.smartForgeLog='Preview:\n'+JSON.stringify(this.smartForge,null,2); },
+
+    // Inject
+    async runInject() {
+      if(!this.inject.device_id||!this.inject.profile_id) { alert('Select device and profile'); return; }
+      this.injecting=true; this.injectLog='Injecting...\n';
+      try {
+        const r = await this.api('/genesis/inject/'+this.inject.device_id,{method:'POST',body:JSON.stringify({
+          profile_id:this.inject.profile_id, cc_number:this.inject.cc, cc_exp:this.inject.cc_exp,
+          cc_cvv:this.inject.cc_cvv, cc_cardholder:this.inject.cc_name, age_days:this.inject.age_days
+        })});
+        this.injectLog += JSON.stringify(r.result||r,null,2)+'\n';
+        try { const ts=await this.api('/genesis/trust-score/'+this.inject.device_id); this.trustScore=ts; this.injectLog+='Trust Score: '+ts.trust_score+'%\n'; } catch(e) {}
+      } catch(e) { this.injectLog+='Error: '+e.message+'\n'; }
+      this.injecting=false;
+    },
+    async injectProfile(pid, did) { if(!did){alert('Select a device');return;} if(!confirm('Inject '+pid+' into '+did+'?'))return; try{await this.api('/genesis/inject/'+did,{method:'POST',body:JSON.stringify({profile_id:pid})}); alert('Injected!');} catch(e){alert(e.message);} },
+    async deleteProfile(pid) { if(!confirm('Delete '+pid+'?'))return; await this.api('/genesis/profiles/'+pid,{method:'DELETE'}); await this.loadProfiles(); },
+
+    // Aging
+    async runAging() {
+      if(!this.aging.device_id) { alert('Select a device'); return; }
+      this.agingRunning=true; this.agingLog='Starting aging pipeline...\n';
+      this.agingPhases.forEach(p => { p.done=false; p.running=false; });
+      try {
+        for(let i=0; i<this.agingPhases.length; i++) {
+          this.agingPhases[i].running = true;
+          this.agingLog += 'Phase '+(i+1)+': '+this.agingPhases[i].name+'...\n';
+          await new Promise(r => setTimeout(r, 500));
+          this.agingPhases[i].running = false;
+          this.agingPhases[i].done = true;
+        }
+        this.agingLog += 'All phases complete!\n';
+      } catch(e) { this.agingLog+='Error: '+e.message+'\n'; }
+      this.agingRunning = false;
+    },
+
+    // Cerberus
+    async validateCard() {
+      if(!this.cerberus.card_input) return;
+      this.cerberus.validating=true; this.cerberus.status='Validating...'; this.cerberus.traffic_light='\u23f3';
+      try {
+        const r = await this.api('/cerberus/validate',{method:'POST',body:JSON.stringify({card:this.cerberus.card_input,provider:this.cerberus.gateway,silent:this.cerberus.silent})});
+        this.cerberus.status = r.status||'UNKNOWN';
+        this.cerberus.traffic_light = r.status==='LIVE'?'\ud83d\udfe2':r.status==='DEAD'?'\ud83d\udd34':'\ud83d\udfe1';
+        this.cerberus.message = r.message||'';
+        this.cerberus.details = { card:r.card||'', network:r.card_type||'', bank:r.bank||'', country:r.country||'', risk_score:r.risk_score!=null?r.risk_score+'/100':'', gateways:(r.gateways_tried||[]).join(', ')||'BIN lookup', decline:r.decline_reason||'', action:r.retry_advice||r.decline_action||'', bypass:r.bypass_plan?'Score: '+r.bypass_plan.bypass_score+'/100':'' };
+        let intel = [];
+        if(r.bin_info) { intel.push('BIN: '+r.bin_info.bank+' | '+r.bin_info.type+' | '+r.bin_info.level); intel.push('Country: '+r.bin_info.country+' | Network: '+r.bin_info.network); }
+        if(r.decline_category) { intel.push('\nDecline: '+r.decline_category+' ('+r.decline_severity+')'); intel.push('Recoverable: '+(r.is_recoverable?'Yes':'No')); }
+        this.cerberus.intel = intel.join('\n') || 'No additional intelligence';
+      } catch(e) { this.cerberus.status='ERROR'; this.cerberus.message=e.message; this.cerberus.traffic_light='\u26AA'; }
+      this.cerberus.validating = false;
+    },
+    clearCard() { this.cerberus.card_input=''; this.cerberus.status=''; this.cerberus.traffic_light=''; this.cerberus.message=''; this.cerberus.details={}; this.cerberus.intel=''; },
+    async batchValidate() {
+      const cards = this.cerberus.batch_input.trim().split('\n').filter(l=>l.trim());
+      if(!cards.length) return;
+      this.cerberus.batch_running=true; this.cerberus.batch_results=[]; this.cerberus.batch_progress='0/'+cards.length;
+      for(let i=0; i<cards.length; i++) {
+        try {
+          const r = await this.api('/cerberus/validate',{method:'POST',body:JSON.stringify({card:cards[i].trim()})});
+          this.cerberus.batch_results.push({card:r.card||cards[i].substring(0,10)+'...',status:r.status||'UNKNOWN',network:r.card_type||'',bank:r.bank||''});
+        } catch(e) { this.cerberus.batch_results.push({card:cards[i].substring(0,10)+'...',status:'ERROR',network:'',bank:e.message}); }
+        this.cerberus.batch_progress = (i+1)+'/'+cards.length;
+      }
+      this.cerberus.batch_running = false;
+    },
+    async lookupBin() { if(!this.cerberus.bin_input) return; try { const r=await this.api('/cerberus/validate',{method:'POST',body:JSON.stringify({card:this.cerberus.bin_input+'0000000000'})}); this.cerberus.bin_result=JSON.stringify(r.bin_info||r,null,2); } catch(e) { this.cerberus.bin_result='Error: '+e.message; } },
+    async predict3ds() { this.cerberus.bin_result='3DS Prediction: Coming soon (connect to /api/intel/3ds)'; },
+    async maxDrain() { this.cerberus.bin_result='MaxDrain Plan: Coming soon (connect to /api/intel/maxdrain)'; },
+
+    // KYC
+    startKycStream(deviceId) {
+      if(this.kycWs) this.kycWs.close();
+      const proto=location.protocol==='https:'?'wss:':'ws:';
+      this.kycWs = new WebSocket(proto+'//'+location.host+'/ws/screen/'+deviceId);
+      this.kycWs.binaryType = 'arraybuffer';
+      const canvas = document.getElementById('kycCanvas');
+      const ctx = canvas?.getContext('2d');
+      this.kycWs.onmessage = (e) => {
+        if(!ctx) return;
+        const blob = new Blob([e.data],{type:'image/jpeg'});
+        const img = new Image();
+        img.onload = () => { canvas.width=img.width; canvas.height=img.height; ctx.drawImage(img,0,0); URL.revokeObjectURL(img.src); };
         img.src = URL.createObjectURL(blob);
       };
     },
+    async kycAdbInput(key) {
+      if(!this.kyc.device_id) return;
+      const keyMap = {back:'4',home:'3',recents:'187'};
+      try { await this.api('/devices/'+this.kyc.device_id+'/input',{method:'POST',body:JSON.stringify({action:'keyevent',keycode:keyMap[key]||key})}); } catch(e) {}
+    },
+    async kycPatch() {
+      if(!this.kyc.device_id) return;
+      try { await this.api('/stealth/'+this.kyc.device_id+'/patch',{method:'POST',body:JSON.stringify({preset:this.kyc.spoof_preset,carrier:this.kyc.spoof_carrier,location:this.kyc.spoof_location})}); alert('Spoof applied!'); } catch(e) { alert(e.message); }
+    },
+    async uploadFace(event) {
+      if(!this.kyc.device_id || !event.target.files[0]) return;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const r = await this.api('/kyc/'+this.kyc.device_id+'/upload_face',{method:'POST',body:JSON.stringify({image_base64:e.target.result.split(',')[1]})});
+          this.kyc.face_loaded = true; this.kyc.gpu_ready = r.gpu_ready||false;
+          this.kyc.log = 'Face uploaded. GPU ready: '+(r.gpu_ready?'Yes':'No');
+        } catch(err) { this.kyc.log = 'Upload error: '+err.message; }
+      };
+      reader.readAsDataURL(event.target.files[0]);
+    },
+    async startDeepfake() { if(!this.kyc.device_id)return; try { const r=await this.api('/kyc/'+this.kyc.device_id+'/start_deepfake',{method:'POST'}); this.kyc.df_active=true; this.kyc.log='Deepfake started: '+JSON.stringify(r); } catch(e) { this.kyc.log='Error: '+e.message; } },
+    async stopDeepfake() { if(!this.kyc.device_id)return; try { await this.api('/kyc/'+this.kyc.device_id+'/stop_deepfake',{method:'POST'}); this.kyc.df_active=false; this.kyc.log='Deepfake stopped'; } catch(e) { this.kyc.log='Error: '+e.message; } },
+    async deepfakeStatus() { if(!this.kyc.device_id)return; try { const r=await this.api('/kyc/'+this.kyc.device_id+'/deepfake_status'); this.kyc.df_active=r.active||false; this.kyc.gpu_ready=r.gpu_ready||false; this.kyc.log='Status: '+JSON.stringify(r,null,2); } catch(e) { this.kyc.log='Error: '+e.message; } },
+
+    // Intelligence
+    async askCopilot() {
+      if(!this.intel.copilot_query) return;
+      const q = this.intel.copilot_query; this.intel.copilot_query = '';
+      this.intel.copilot_log += '\n> '+q+'\n';
+      try { const r=await this.api('/intel/copilot',{method:'POST',body:JSON.stringify({query:q})}); this.intel.copilot_log+=r.response||JSON.stringify(r)+'\n'; } catch(e) { this.intel.copilot_log+='Error: '+e.message+'\n'; }
+    },
+    async runRecon() {
+      if(!this.intel.recon_domain) return;
+      this.intel.recon_log = 'Running recon on '+this.intel.recon_domain+'...\n';
+      try { const r=await this.api('/intel/recon',{method:'POST',body:JSON.stringify({domain:this.intel.recon_domain,type:this.intel.recon_type})}); this.intel.recon_log+=JSON.stringify(r,null,2); } catch(e) { this.intel.recon_log+='Error: '+e.message; }
+    },
+
+    // Network
+    async vpnConnect() { try { const r=await this.api('/network/vpn/connect',{method:'POST',body:'{}'}); this.network.vpn_connected=true; this.network.vpn_server=r.server||''; this.network.vpn_ip=r.ip||''; } catch(e) { alert(e.message); } },
+    async vpnDisconnect() { try { await this.api('/network/vpn/disconnect',{method:'POST',body:'{}'}); this.network.vpn_connected=false; this.network.vpn_server=''; this.network.vpn_ip=''; } catch(e) { alert(e.message); } },
+    async vpnStatus() { try { const r=await this.api('/network/status'); this.network.vpn_connected=r.connected||false; this.network.vpn_server=r.server||''; this.network.vpn_ip=r.ip||''; } catch(e) {} },
+
+    // Targets
+    async analyzeTarget() {
+      if(!this.targets.url) return;
+      this.targets.log = 'Analyzing '+this.targets.url+'...\n';
+      try { const r=await this.api('/targets/analyze',{method:'POST',body:JSON.stringify({url:this.targets.url,depth:this.targets.depth})}); this.targets.log+=JSON.stringify(r,null,2); } catch(e) { this.targets.log+='Error: '+e.message; }
+    },
+
+    // AI Tasks
+    async startAiTask() {
+      if(!this.aiTasks.device_id) { alert('Select a device'); return; }
+      this.aiTasks.log = 'Starting task...\n';
+      try { const r=await this.api('/agent/task/'+this.aiTasks.device_id,{method:'POST',body:JSON.stringify({template:this.aiTasks.template,prompt:this.aiTasks.prompt})}); this.aiTasks.log+=JSON.stringify(r,null,2)+'\n'; } catch(e) { this.aiTasks.log+='Error: '+e.message+'\n'; }
+    },
+    async stopAiTask() { this.aiTasks.log+='Stop requested\n'; },
   };
 }
 </script>

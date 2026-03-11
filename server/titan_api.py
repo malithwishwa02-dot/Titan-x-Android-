@@ -196,6 +196,7 @@ class InputBody(BaseModel):
     y2: float = 0.0
     duration: int = 300
     keycode: str = ""
+    text: str = ""
 
 @app.post("/api/devices/{device_id}/input")
 async def device_input(device_id: str, body: InputBody):
@@ -232,6 +233,15 @@ async def device_input(device_id: str, body: InputBody):
     elif body.type == "key":
         _adb(t, f'shell "input keyevent {body.keycode}"')
         return {"ok": True, "action": "key", "keycode": body.keycode}
+
+    elif body.type == "text":
+        # Escape text for ADB shell
+        escaped = body.text.replace(" ", "%s").replace("'", "\\'")
+        escaped = escaped.replace('"', '\\"').replace("&", "\\&")
+        escaped = escaped.replace("(", "\\(").replace(")", "\\)")
+        escaped = escaped.replace(";", "\\;").replace("|", "\\|")
+        _adb(t, f"shell \"input text '{escaped}'\"")
+        return {"ok": True, "action": "text", "length": len(body.text)}
 
     return {"ok": False, "error": "unknown input type"}
 
@@ -677,6 +687,121 @@ async def genesis_countries():
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# SECTION 3.5: AI AGENT — /api/agent/*
+# Autonomous device control via GPU LLM see→think→act loop
+# ═══════════════════════════════════════════════════════════════════════
+
+from device_agent import DeviceAgent, TASK_TEMPLATES
+
+# Cache agents per device
+_agents: Dict[str, DeviceAgent] = {}
+
+def _get_agent(device_id: str) -> DeviceAgent:
+    dev = dm.get_device(device_id)
+    if not dev:
+        raise HTTPException(404, "Device not found")
+    if device_id not in _agents:
+        if dev.device_type == "vmos_cloud" and dev.vmos_pad_code:
+            # Use VMOS Cloud API adapter for screenshot + touch
+            bridge = _get_vmos()
+            if bridge:
+                from vmos_agent_adapter import VMOSScreenAdapter, VMOSTouchAdapter
+                agent = DeviceAgent(adb_target=dev.adb_target or "vmos-api")
+                agent.analyzer = VMOSScreenAdapter(bridge=bridge, pad_code=dev.vmos_pad_code)
+                agent.touch = VMOSTouchAdapter(bridge=bridge, pad_code=dev.vmos_pad_code)
+                _agents[device_id] = agent
+                logger.info(f"VMOS agent created for {device_id} (pad={dev.vmos_pad_code})")
+            else:
+                _agents[device_id] = DeviceAgent(adb_target=dev.adb_target)
+        else:
+            _agents[device_id] = DeviceAgent(adb_target=dev.adb_target)
+    return _agents[device_id]
+
+
+class AgentTaskBody(BaseModel):
+    prompt: str = ""
+    template: str = ""          # browse_url, create_account, install_app, etc.
+    template_params: Dict[str, str] = {}
+    model: str = "hermes3:8b"
+    max_steps: int = 30
+    persona: Dict[str, str] = {}  # name, email, phone, password for form filling
+
+
+@app.post("/api/agent/task/{device_id}")
+async def agent_start_task(device_id: str, body: AgentTaskBody):
+    """Start an autonomous AI task on an Android device.
+    The agent will see the screen, decide actions, and execute them via ADB."""
+    agent = _get_agent(device_id)
+
+    if body.model:
+        agent.model = body.model
+
+    task_id = agent.start_task(
+        prompt=body.prompt,
+        persona=body.persona if body.persona else None,
+        template=body.template if body.template else None,
+        template_params=body.template_params if body.template_params else None,
+        max_steps=body.max_steps,
+    )
+    return {"task_id": task_id, "device_id": device_id, "status": "started"}
+
+
+@app.get("/api/agent/task/{device_id}/{task_id}")
+async def agent_task_status(device_id: str, task_id: str):
+    """Get status of a running or completed agent task."""
+    agent = _get_agent(device_id)
+    task = agent.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    return task.to_dict()
+
+
+@app.post("/api/agent/stop/{device_id}/{task_id}")
+async def agent_stop_task(device_id: str, task_id: str):
+    """Stop a running agent task."""
+    agent = _get_agent(device_id)
+    ok = agent.stop_task(task_id)
+    return {"stopped": ok, "task_id": task_id}
+
+
+@app.get("/api/agent/tasks/{device_id}")
+async def agent_list_tasks(device_id: str):
+    """List all tasks for a device."""
+    agent = _get_agent(device_id)
+    return {"tasks": agent.list_tasks()}
+
+
+@app.get("/api/agent/screen/{device_id}")
+async def agent_analyze_screen(device_id: str):
+    """One-shot screen analysis — capture screenshot + detect UI elements."""
+    agent = _get_agent(device_id)
+    return agent.analyze_screen()
+
+
+@app.get("/api/agent/templates")
+async def agent_templates():
+    """List available task templates."""
+    return {"templates": {k: {"params": v["params"], "prompt": v["prompt"]}
+                          for k, v in TASK_TEMPLATES.items()}}
+
+
+@app.get("/api/agent/models")
+async def agent_models():
+    """List available AI models on GPU Ollama."""
+    import urllib.request
+    gpu_url = os.environ.get("TITAN_GPU_OLLAMA", "http://127.0.0.1:11435")
+    try:
+        req = urllib.request.Request(f"{gpu_url}/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            models = [{"name": m["name"], "size_gb": round(m.get("size", 0) / 1e9, 1)}
+                      for m in data.get("models", [])]
+            return {"models": models, "gpu_url": gpu_url, "status": "connected"}
+    except Exception as e:
+        return {"models": [], "gpu_url": gpu_url, "status": "disconnected", "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # SECTION 4: INTELLIGENCE — /api/intel/*
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -903,7 +1028,7 @@ async def ws_screen(websocket: WebSocket, device_id: str):
             data = await dm.screenshot(device_id)
             if data:
                 await websocket.send_bytes(data)
-            await asyncio.sleep(1.0)  # ~1 FPS screencap
+            await asyncio.sleep(0.25)  # ~4 FPS screencap
     except WebSocketDisconnect:
         pass
     except Exception as e:
@@ -938,6 +1063,301 @@ async def ws_logs(websocket: WebSocket, device_id: str):
             proc.kill()
         except Exception:
             pass
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# VMOS CLOUD — Bridge API endpoints for hybrid device management
+# ═══════════════════════════════════════════════════════════════════════
+
+_vmos_bridge = None
+
+def _get_vmos():
+    global _vmos_bridge
+    if _vmos_bridge is None:
+        try:
+            from vmos_cloud_bridge import VMOSCloudBridge
+            key = os.environ.get("VMOS_API_KEY", "")
+            secret = os.environ.get("VMOS_API_SECRET", "")
+            if key and secret:
+                _vmos_bridge = VMOSCloudBridge(api_key=key, api_secret=secret)
+                logger.info("VMOS Cloud bridge initialized")
+            else:
+                logger.info("VMOS Cloud not configured (no VMOS_API_KEY)")
+        except Exception as e:
+            logger.warning(f"VMOS Cloud bridge init failed: {e}")
+    return _vmos_bridge
+
+
+class VMOSRegisterBody(BaseModel):
+    pad_code: str
+    device_id: str = ""
+    model: str = "samsung_s25_ultra"
+    country: str = "US"
+
+
+class VMOSPatchBody(BaseModel):
+    brand: str = "samsung"
+    model: str = "SM-S928U"
+    device: str = "e3q"
+    fingerprint: str = ""
+    android_version: str = "15"
+    imei: str = ""
+    iccid: str = ""
+    imsi: str = ""
+    phone_number: str = ""
+    lat: float = 40.7128
+    lon: float = -74.0060
+    wifi_ssid: str = "NETGEAR72-5G"
+
+
+class VMOSInjectBody(BaseModel):
+    contacts: List[Dict[str, str]] = []
+    call_logs: List[Dict[str, Any]] = []
+    sms: List[Dict[str, str]] = []
+    chrome_commands: List[str] = []
+    wallet_commands: List[str] = []
+
+
+class VMOSShellBody(BaseModel):
+    command: str
+
+
+class VMOSTouchBody(BaseModel):
+    x: int = 0
+    y: int = 0
+    action: str = "tap"       # tap, swipe
+    x2: int = 0
+    y2: int = 0
+    duration: int = 300
+
+
+class VMOSProxyBody(BaseModel):
+    ip: str
+    port: int
+    username: str = ""
+    password: str = ""
+    proxy_type: str = "socks5"
+
+
+@app.get("/api/vmos/status")
+async def vmos_status():
+    """Check VMOS Cloud bridge connectivity."""
+    bridge = _get_vmos()
+    if not bridge:
+        return {"status": "not_configured", "message": "Set VMOS_API_KEY and VMOS_API_SECRET env vars"}
+    try:
+        instances = await bridge.list_instances(page=1, rows=5)
+        return {
+            "status": "connected",
+            "instances": len(instances),
+            "devices": [i.to_dict() for i in instances],
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/vmos/register")
+async def vmos_register_device(body: VMOSRegisterBody):
+    """Register a VMOS Cloud instance as a Titan device."""
+    bridge = _get_vmos()
+    if not bridge:
+        raise HTTPException(503, "VMOS Cloud not configured")
+
+    dev_id = body.device_id or f"vmos-{body.pad_code[:8].lower()}"
+
+    # Check if already registered
+    existing = dm.get_device(dev_id)
+    if existing:
+        return {"device": existing.to_dict(), "message": "Already registered"}
+
+    # Try to get ADB access via SSH tunnel
+    adb_info = await bridge.open_adb(body.pad_code)
+    adb_target = ""
+    if adb_info:
+        adb_target = adb_info.get("adb_connect", "").replace("adb connect ", "")
+
+    from device_manager import DeviceInstance, DEVICES_DIR
+    from datetime import datetime, timezone
+
+    dev = DeviceInstance(
+        id=dev_id,
+        container=f"vmos-{body.pad_code}",
+        adb_port=0,
+        adb_target=adb_target,
+        config={
+            "model": body.model,
+            "country": body.country,
+            "carrier": "",
+            "pad_code": body.pad_code,
+        },
+        state="ready",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        device_type="vmos_cloud",
+        vmos_pad_code=body.pad_code,
+    )
+
+    dm._devices[dev_id] = dev
+    dm._save_state()
+
+    return {
+        "device": dev.to_dict(),
+        "adb_info": adb_info,
+        "message": f"VMOS device {body.pad_code} registered as {dev_id}",
+    }
+
+
+@app.get("/api/vmos/instances")
+async def vmos_list_instances():
+    """List all VMOS Cloud instances from the API."""
+    bridge = _get_vmos()
+    if not bridge:
+        raise HTTPException(503, "VMOS Cloud not configured")
+    instances = await bridge.list_instances()
+    return {"instances": [i.to_dict() for i in instances]}
+
+
+@app.get("/api/vmos/{device_id}/properties")
+async def vmos_get_properties(device_id: str):
+    """Get all properties for a VMOS device."""
+    bridge = _get_vmos()
+    dev = dm.get_device(device_id)
+    if not bridge or not dev or dev.device_type != "vmos_cloud":
+        raise HTTPException(404, "VMOS device not found")
+    props = await bridge.get_instance_properties(dev.vmos_pad_code)
+    return {"device_id": device_id, "properties": props}
+
+
+@app.post("/api/vmos/{device_id}/patch")
+async def vmos_patch_device(device_id: str, body: VMOSPatchBody):
+    """Apply full stealth patch to VMOS Cloud device using native APIs."""
+    bridge = _get_vmos()
+    dev = dm.get_device(device_id)
+    if not bridge or not dev or dev.device_type != "vmos_cloud":
+        raise HTTPException(404, "VMOS device not found")
+
+    result = await bridge.full_stealth_patch(
+        dev.vmos_pad_code,
+        preset={
+            "brand": body.brand, "model": body.model, "device": body.device,
+            "fingerprint": body.fingerprint, "android_version": body.android_version,
+        },
+        carrier={
+            "imei": body.imei, "iccid": body.iccid, "imsi": body.imsi,
+            "phone_number": body.phone_number,
+        },
+        location={"lat": body.lat, "lon": body.lon},
+        wifi={"ssid": body.wifi_ssid},
+    )
+    dev.patch_result = result
+    dm._save_state()
+    return {"device_id": device_id, "result": result}
+
+
+@app.post("/api/vmos/{device_id}/inject")
+async def vmos_inject_profile(device_id: str, body: VMOSInjectBody):
+    """Inject profile data into VMOS Cloud device."""
+    bridge = _get_vmos()
+    dev = dm.get_device(device_id)
+    if not bridge or not dev or dev.device_type != "vmos_cloud":
+        raise HTTPException(404, "VMOS device not found")
+
+    result = await bridge.full_profile_inject(
+        dev.vmos_pad_code,
+        contacts=body.contacts or None,
+        call_logs=body.call_logs or None,
+        sms_messages=body.sms or None,
+        chrome_commands=body.chrome_commands or None,
+        wallet_commands=body.wallet_commands or None,
+    )
+    return {"device_id": device_id, "result": result}
+
+
+@app.post("/api/vmos/{device_id}/shell")
+async def vmos_shell(device_id: str, body: VMOSShellBody):
+    """Execute shell command on VMOS Cloud device."""
+    bridge = _get_vmos()
+    dev = dm.get_device(device_id)
+    if not bridge or not dev or dev.device_type != "vmos_cloud":
+        raise HTTPException(404, "VMOS device not found")
+
+    result = await bridge.exec_shell(dev.vmos_pad_code, body.command)
+    return {"device_id": device_id, "result": result.to_dict()}
+
+
+@app.post("/api/vmos/{device_id}/touch")
+async def vmos_touch(device_id: str, body: VMOSTouchBody):
+    """Simulate touch on VMOS Cloud device."""
+    bridge = _get_vmos()
+    dev = dm.get_device(device_id)
+    if not bridge or not dev or dev.device_type != "vmos_cloud":
+        raise HTTPException(404, "VMOS device not found")
+
+    if body.action == "swipe":
+        result = await bridge.swipe(dev.vmos_pad_code, body.x, body.y, body.x2, body.y2, body.duration)
+    else:
+        result = await bridge.tap(dev.vmos_pad_code, body.x, body.y)
+    return {"device_id": device_id, "result": result.to_dict()}
+
+
+@app.get("/api/vmos/{device_id}/screenshot")
+async def vmos_screenshot(device_id: str):
+    """Get screenshot URL from VMOS Cloud device."""
+    bridge = _get_vmos()
+    dev = dm.get_device(device_id)
+    if not bridge or not dev or dev.device_type != "vmos_cloud":
+        raise HTTPException(404, "VMOS device not found")
+
+    url = await bridge.screenshot(dev.vmos_pad_code)
+    if url:
+        return {"device_id": device_id, "screenshot_url": url}
+    raise HTTPException(500, "Screenshot failed")
+
+
+@app.post("/api/vmos/{device_id}/proxy")
+async def vmos_set_proxy(device_id: str, body: VMOSProxyBody):
+    """Set network proxy on VMOS Cloud device."""
+    bridge = _get_vmos()
+    dev = dm.get_device(device_id)
+    if not bridge or not dev or dev.device_type != "vmos_cloud":
+        raise HTTPException(404, "VMOS device not found")
+
+    result = await bridge.set_proxy(
+        dev.vmos_pad_code, body.ip, body.port,
+        username=body.username, password=body.password,
+        proxy_type=body.proxy_type,
+    )
+    return {"device_id": device_id, "result": result.to_dict()}
+
+
+@app.get("/api/vmos/{device_id}/apps")
+async def vmos_list_apps(device_id: str):
+    """List installed apps on VMOS Cloud device."""
+    bridge = _get_vmos()
+    dev = dm.get_device(device_id)
+    if not bridge or not dev or dev.device_type != "vmos_cloud":
+        raise HTTPException(404, "VMOS device not found")
+
+    apps = await bridge.list_apps(dev.vmos_pad_code)
+    return {"device_id": device_id, "apps": apps}
+
+
+@app.post("/api/vmos/{device_id}/adb")
+async def vmos_open_adb(device_id: str):
+    """Open ADB-over-SSH tunnel to VMOS Cloud device."""
+    bridge = _get_vmos()
+    dev = dm.get_device(device_id)
+    if not bridge or not dev or dev.device_type != "vmos_cloud":
+        raise HTTPException(404, "VMOS device not found")
+
+    info = await bridge.open_adb(dev.vmos_pad_code)
+    if info:
+        # Update adb_target in device state
+        adb_connect = info.get("adb_connect", "").replace("adb connect ", "")
+        if adb_connect:
+            dev.adb_target = adb_connect
+            dm._save_state()
+        return {"device_id": device_id, "adb": info}
+    raise HTTPException(500, "Failed to open ADB access")
 
 
 # ═══════════════════════════════════════════════════════════════════════

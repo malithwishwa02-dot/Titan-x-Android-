@@ -64,6 +64,8 @@ class DeviceInstance:
     patch_result: Dict[str, Any] = field(default_factory=dict)
     installed_apps: List[str] = field(default_factory=list)
     stealth_score: int = 0
+    device_type: str = "redroid"       # "redroid" | "vmos_cloud" | "emulator"
+    vmos_pad_code: str = ""            # VMOS Cloud instance code (e.g. "ACP250331GLMP7YX")
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -336,12 +338,21 @@ class DeviceManager:
         if not dev or dev.state != "ready":
             return None
 
-        r = _run(f"adb -s {dev.adb_target} exec-out screencap -p", timeout=10)
-        if r["ok"] and r["stdout"]:
+        try:
+            # Use raw binary mode — text mode corrupts PNG data
+            proc = subprocess.run(
+                ["adb", "-s", dev.adb_target, "exec-out", "screencap", "-p"],
+                capture_output=True, timeout=10,
+            )
+            if proc.returncode != 0 or len(proc.stdout) < 100:
+                return None
+
+            png_bytes = proc.stdout
+
             try:
                 from PIL import Image
                 import io
-                img = Image.open(io.BytesIO(r["stdout"].encode("latin-1")))
+                img = Image.open(io.BytesIO(png_bytes))
                 img = img.convert("RGB")
                 w, h = img.size
                 img = img.resize((w // 2, h // 2))
@@ -349,5 +360,7 @@ class DeviceManager:
                 img.save(buf, format="JPEG", quality=70)
                 return buf.getvalue()
             except Exception:
-                pass
-        return None
+                # If PIL fails, return raw PNG
+                return png_bytes
+        except Exception:
+            return None

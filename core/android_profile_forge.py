@@ -487,7 +487,9 @@ class AndroidProfileForge:
         """Generate realistic call history spread over profile age."""
         rng = self._rng
         # ~1.5 calls/day on average
-        num_calls = rng.randint(max(20, age_days), min(age_days * 3, 200))
+        _lo = max(20, age_days)
+        _hi = max(_lo, min(age_days * 3, 200))
+        num_calls = rng.randint(_lo, _hi)
         logs = []
 
         # Weight: more calls to frequent contacts (Pareto)
@@ -646,7 +648,9 @@ class AndroidProfileForge:
         other_domains = domains[len(top_domains):]
 
         # ~8-15 mobile browsing sessions per day
-        target_entries = rng.randint(max(100, age_days * 5), min(age_days * 15, 800))
+        lo = max(100, age_days * 5)
+        hi = max(lo, min(age_days * 15, 800))
+        target_entries = rng.randint(lo, hi)
 
         for _ in range(target_entries):
             # 80% from top domains, 20% from others
@@ -925,7 +929,7 @@ class AndroidProfileForge:
         num_subs = rng.randint(1, min(3, len(subs)))
         for pkg, name, price, interval in rng.sample(subs, num_subs):
             # First purchase backdated, then recurring
-            first_dt = now - timedelta(days=rng.randint(30, min(age_days, 90)))
+            first_dt = now - timedelta(days=rng.randint(min(30, age_days), max(30, min(age_days, 90))))
             purchases.append({
                 "account": persona_email,
                 "doc_id": f"{pkg}:subs",

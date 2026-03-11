@@ -2,161 +2,375 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#0a0e17">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
 <title>Titan Device</title>
 <link rel="manifest" href="/static/manifest.json">
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; }
-  html, body { width:100%; height:100%; overflow:hidden; background:#000; touch-action:none; }
-  #screen { width:100%; height:calc(100% - 48px); display:flex; align-items:center; justify-content:center; background:#0a0e17; }
-  #screen canvas { max-width:100%; max-height:100%; object-fit:contain; }
-  #navbar { height:48px; background:#111827; border-top:1px solid #1e293b; display:flex; align-items:center; justify-content:space-around; }
-  .nav-btn { color:#64748b; font-size:11px; display:flex; flex-direction:column; align-items:center; gap:2px; background:none; border:none; padding:4px 16px; cursor:pointer; }
-  .nav-btn:active { color:#00d4ff; }
-  .nav-btn span { font-size:18px; }
-  #status { position:fixed; top:8px; right:8px; z-index:10; font-size:10px; color:#64748b; background:rgba(0,0,0,0.7); padding:2px 8px; border-radius:8px; }
-  .connecting { color:#eab308; }
-  .connected { color:#22c55e; }
-  .error { color:#ef4444; }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  html{height:100%;width:100%;overflow:hidden}
+  body{height:100%;width:100%;overflow:hidden;background:#000;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;touch-action:none;position:fixed;top:0;left:0;right:0;bottom:0}
+
+  /* Full-bleed wrapper — NO max-width on mobile */
+  .phone-wrap{width:100%;height:100%;display:flex;flex-direction:column;position:relative;background:#000;overflow:hidden}
+
+  /* Screen takes ALL available space */
+  .screen-area{position:absolute;top:0;left:0;right:0;bottom:0;overflow:hidden;background:#000;z-index:1}
+  .screen-area canvas{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
+  .screen-area .placeholder{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#333;font-size:14px;text-align:center}
+
+  /* Floating controls — overlaid on top of screen */
+  .controls-overlay{position:absolute;bottom:0;left:0;right:0;z-index:20;pointer-events:none}
+  .controls-overlay>*{pointer-events:auto}
+
+  /* Gesture navigation bar — minimal, transparent */
+  .gesture-bar{height:32px;display:flex;align-items:center;justify-content:center;background:linear-gradient(transparent,rgba(0,0,0,0.4));padding-bottom:env(safe-area-inset-bottom,0)}
+  .gesture-pill{width:134px;height:5px;background:rgba(255,255,255,0.4);border-radius:3px;cursor:pointer}
+  .gesture-pill:active{background:#fff}
+
+  /* Connection indicator — tiny top-right */
+  .conn-badge{position:absolute;top:env(safe-area-inset-top,6px);right:8px;z-index:25;font-size:9px;color:#fff;background:rgba(0,0,0,0.5);padding:2px 8px;border-radius:10px;backdrop-filter:blur(4px)}
+  .conn-badge .d{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle}
+  .conn-badge .d.g{background:#22c55e}
+  .conn-badge .d.y{background:#eab308}
+  .conn-badge .d.r{background:#ef4444}
+
+  /* Floating action button */
+  .fab{position:absolute;bottom:42px;right:12px;z-index:25;width:44px;height:44px;border-radius:50%;background:rgba(8,145,178,0.85);border:none;color:#fff;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px);box-shadow:0 2px 12px rgba(0,0,0,0.4);transition:transform 0.15s}
+  .fab:active{transform:scale(0.9)}
+
+  /* Drawer — slides up from bottom */
+  .drawer{position:absolute;bottom:0;left:0;right:0;z-index:30;background:rgba(10,14,23,0.97);backdrop-filter:blur(20px);border-radius:20px 20px 0 0;transform:translateY(100%);transition:transform 0.3s cubic-bezier(0.4,0,0.2,1);padding:10px 16px calc(16px + env(safe-area-inset-bottom,0));max-height:70vh;overflow-y:auto}
+  .drawer.open{transform:translateY(0)}
+  .drawer-handle{width:36px;height:4px;background:#334155;border-radius:2px;margin:0 auto 14px}
+
+  /* AI prompt bar */
+  .ai-bar{display:flex;gap:8px;align-items:center}
+  .ai-bar input{flex:1;background:#1e293b;border:1px solid #334155;border-radius:14px;padding:12px 16px;font-size:15px;color:#e2e8f0;outline:none}
+  .ai-bar input:focus{border-color:#0891b2}
+  .ai-bar input::placeholder{color:#475569}
+  .ai-bar button{padding:12px 18px;background:linear-gradient(135deg,#0891b2,#06b6d4);border:none;border-radius:14px;color:#fff;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+  .ai-bar button:disabled{opacity:0.4}
+
+  /* Quick actions */
+  .quick-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:14px}
+  .quick-btn{display:flex;flex-direction:column;align-items:center;gap:5px;padding:12px 4px;background:#1e293b;border:1px solid #1e293b;border-radius:14px;cursor:pointer;transition:all 0.15s}
+  .quick-btn:active{transform:scale(0.93);border-color:#0891b2}
+  .quick-btn .icon{font-size:22px}
+  .quick-btn .label{font-size:10px;color:#94a3b8}
+
+  /* Keyboard input bar */
+  .kbd-bar{position:absolute;bottom:0;left:0;right:0;z-index:35;background:rgba(15,23,42,0.97);backdrop-filter:blur(12px);padding:8px 12px calc(8px + env(safe-area-inset-bottom,0));display:flex;gap:8px;transform:translateY(100%);transition:transform 0.2s ease}
+  .kbd-bar.open{transform:translateY(0)}
+  .kbd-bar input{flex:1;background:#0f172a;border:1px solid #334155;border-radius:10px;padding:10px 14px;color:#e2e8f0;font-size:15px;outline:none}
+  .kbd-bar button{padding:10px 14px;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;color:#fff}
+  .kbd-bar .send{background:#0891b2}
+  .kbd-bar .close{background:#334155}
+
+  /* Toast notification */
+  .toast{position:absolute;top:env(safe-area-inset-top,8px);left:10px;right:10px;z-index:40;background:rgba(10,14,23,0.92);backdrop-filter:blur(12px);border:1px solid #1e293b;border-radius:14px;padding:10px 14px;font-size:12px;color:#e2e8f0;transform:translateY(-120%);transition:transform 0.3s ease;display:flex;align-items:center;gap:8px}
+  .toast.show{transform:translateY(0)}
+  .toast .badge{padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700}
+  .toast .badge.running{background:#0c4a6e;color:#38bdf8}
+  .toast .badge.done{background:#14532d;color:#4ade80}
+  .toast .badge.fail{background:#7f1d1d;color:#f87171}
+
+  /* Desktop: show phone frame */
+  @media (min-width:600px) {
+    body{display:flex;align-items:center;justify-content:center;background:#080808}
+    .phone-wrap{max-width:400px;height:min(868px,96vh);border-radius:44px;border:3px solid #1a1a1a;box-shadow:0 0 80px rgba(0,0,0,0.9),0 0 1px rgba(255,255,255,0.03) inset}
+    .screen-area{border-radius:41px;top:0;bottom:0}
+    .screen-area canvas{border-radius:41px}
+    .fab{bottom:50px;right:16px}
+  }
 </style>
 </head>
 <body>
-<div id="status" class="connecting">Connecting...</div>
 
-<div id="screen">
-  <canvas id="canvas"></canvas>
+<div class="phone-wrap" id="app">
+  <!-- Full-bleed screen -->
+  <div class="screen-area" id="screenArea">
+    <canvas id="canvas"></canvas>
+    <div class="placeholder" id="placeholder">
+      <div style="font-size:40px;margin-bottom:12px">📱</div>
+      <div>Connecting...</div>
+      <div style="font-size:11px;color:#222;margin-top:8px" id="devInfo"></div>
+    </div>
+  </div>
+
+  <!-- Connection badge (tiny, top-right) -->
+  <div class="conn-badge"><span id="connDot" class="d y"></span><span id="connLabel">···</span></div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast">
+    <span class="badge running" id="toastBadge">RUNNING</span>
+    <span id="toastText">Agent working...</span>
+  </div>
+
+  <!-- FAB — opens drawer -->
+  <button class="fab" id="fabBtn" onclick="toggleDrawer()">⚡</button>
+
+  <!-- Keyboard input bar -->
+  <div class="kbd-bar" id="kbdBar">
+    <input type="text" id="kbdInput" placeholder="Type text..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <button class="send" onclick="sendTypedText()">Send</button>
+    <button class="close" onclick="toggleKeyboard()">✕</button>
+  </div>
+
+  <!-- Quick Actions Drawer -->
+  <div class="drawer" id="drawer">
+    <div class="drawer-handle"></div>
+    <div class="ai-bar">
+      <input type="text" id="aiPrompt" placeholder="Ask AI to do anything..." autocomplete="off">
+      <button id="aiBtn" onclick="startAgentTask()">Run</button>
+    </div>
+    <div class="quick-grid">
+      <div class="quick-btn" onclick="quickAction('home')"><span class="icon">🏠</span><span class="label">Home</span></div>
+      <div class="quick-btn" onclick="quickAction('back')"><span class="icon">◀</span><span class="label">Back</span></div>
+      <div class="quick-btn" onclick="quickAction('recents')"><span class="icon">▣</span><span class="label">Recents</span></div>
+      <div class="quick-btn" onclick="quickAction('keyboard')"><span class="icon">⌨️</span><span class="label">Keyboard</span></div>
+      <div class="quick-btn" onclick="quickAction('chrome')"><span class="icon">🌐</span><span class="label">Browser</span></div>
+      <div class="quick-btn" onclick="quickAction('settings')"><span class="icon">⚙</span><span class="label">Settings</span></div>
+      <div class="quick-btn" onclick="quickAction('screenshot')"><span class="icon">📸</span><span class="label">Save</span></div>
+      <div class="quick-btn" onclick="quickAction('fullscreen')"><span class="icon">⛶</span><span class="label">Fullscreen</span></div>
+    </div>
+  </div>
+
+  <!-- Gesture bar — transparent overlay at bottom -->
+  <div class="controls-overlay">
+    <div class="gesture-bar" id="gestureBar">
+      <div class="gesture-pill" id="gesturePill"></div>
+    </div>
+  </div>
 </div>
-
-<nav id="navbar">
-  <button class="nav-btn" onclick="sendKey('KEYCODE_APP_SWITCH')"><span>▣</span>Recents</button>
-  <button class="nav-btn" onclick="sendKey('KEYCODE_HOME')"><span>●</span>Home</button>
-  <button class="nav-btn" onclick="sendKey('KEYCODE_BACK')"><span>◀</span>Back</button>
-  <button class="nav-btn" onclick="toggleSettings()"><span>⚙</span>Settings</button>
-</nav>
 
 <script>
 const deviceId = location.hash.replace('#','') || new URLSearchParams(location.search).get('device') || '';
+const API = '/api';
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
-const status = document.getElementById('status');
+const placeholder = document.getElementById('placeholder');
+const screenArea = document.getElementById('screenArea');
 
-let ws = null;
-let reconnectTimer = null;
+let ws = null, reconnectTimer = null;
+let screenW = 1080, screenH = 2400;
+let drawerOpen = false, kbdOpen = false;
+let currentTaskId = null, taskPollTimer = null;
 
+if (deviceId) document.getElementById('devInfo').textContent = deviceId;
+
+// ─── FULLSCREEN API ──────────────────────────────────
+function goFullscreen() {
+  const el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen();
+  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  if (screen.orientation && screen.orientation.lock) {
+    screen.orientation.lock('portrait').catch(()=>{});
+  }
+}
+
+// ─── WEBSOCKET SCREEN ────────────────────────────────
 function connect() {
-  if (ws && ws.readyState <= 1) return;
+  if (!deviceId || (ws && ws.readyState <= 1)) return;
+  setConn('y','···');
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const url = proto + '//' + location.host + '/ws/screen/' + deviceId;
-  status.className = 'connecting';
-  status.textContent = 'Connecting...';
-
-  ws = new WebSocket(url);
+  ws = new WebSocket(proto + '//' + location.host + '/ws/screen/' + deviceId);
   ws.binaryType = 'arraybuffer';
-
-  ws.onopen = () => {
-    status.className = 'connected';
-    status.textContent = '● Live';
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  };
-
+  ws.onopen = () => { setConn('g','Live'); placeholder.style.display = 'none'; };
   ws.onmessage = (e) => {
-    const blob = new Blob([e.data], { type: 'image/jpeg' });
+    const blob = new Blob([e.data], {type:'image/jpeg'});
     const img = new Image();
     img.onload = () => {
-      canvas.width = img.width;
-      canvas.height = img.height;
+      if (canvas.width !== img.width || canvas.height !== img.height) {
+        canvas.width = img.width; canvas.height = img.height;
+        screenW = img.width; screenH = img.height;
+      }
       ctx.drawImage(img, 0, 0);
       URL.revokeObjectURL(img.src);
     };
     img.src = URL.createObjectURL(blob);
   };
-
-  ws.onclose = () => {
-    status.className = 'error';
-    status.textContent = 'Disconnected';
-    reconnectTimer = setTimeout(connect, 3000);
-  };
-
-  ws.onerror = () => { ws.close(); };
+  ws.onclose = () => { setConn('r','Off'); reconnectTimer = setTimeout(connect, 2000); };
+  ws.onerror = () => ws.close();
+}
+function setConn(c, t) {
+  document.getElementById('connDot').className = 'd ' + c;
+  document.getElementById('connLabel').textContent = t;
 }
 
-// Touch → ADB input
+// ─── TOUCH → ADB (normalized 0-1 coordinates) ───────
 let touchStart = null;
-canvas.addEventListener('touchstart', (e) => {
-  e.preventDefault();
-  const t = e.touches[0];
-  const rect = canvas.getBoundingClientRect();
-  touchStart = {
-    x: (t.clientX - rect.left) / rect.width,
-    y: (t.clientY - rect.top) / rect.height,
-    time: Date.now()
-  };
-});
+function getRelXY(e, touch) {
+  const r = canvas.getBoundingClientRect();
+  const cX = touch ? e.clientX : e.clientX;
+  const cY = touch ? e.clientY : e.clientY;
+  return { x: (cX - r.left) / r.width, y: (cY - r.top) / r.height };
+}
 
-canvas.addEventListener('touchend', (e) => {
+screenArea.addEventListener('touchstart', (e) => {
+  if (drawerOpen || kbdOpen) return;
   e.preventDefault();
+  const p = getRelXY(e.touches[0], true);
+  touchStart = { ...p, time: Date.now() };
+}, {passive:false});
+
+screenArea.addEventListener('touchend', (e) => {
   if (!touchStart) return;
-  const t = e.changedTouches[0];
-  const rect = canvas.getBoundingClientRect();
-  const endX = (t.clientX - rect.left) / rect.width;
-  const endY = (t.clientY - rect.top) / rect.height;
-  const dx = endX - touchStart.x;
-  const dy = endY - touchStart.y;
+  e.preventDefault();
+  const p = getRelXY(e.changedTouches[0], true);
+  const dx = p.x - touchStart.x, dy = p.y - touchStart.y;
   const dist = Math.sqrt(dx*dx + dy*dy);
   const dt = Date.now() - touchStart.time;
+  if (dist < 0.02 && dt < 350) sendTap(touchStart.x, touchStart.y);
+  else if (dist >= 0.02) sendSwipe(touchStart.x, touchStart.y, p.x, p.y, Math.max(dt, 80));
+  touchStart = null;
+}, {passive:false});
 
-  if (dist < 0.03 && dt < 300) {
-    sendTap(touchStart.x, touchStart.y);
-  } else if (dist >= 0.03) {
-    sendSwipe(touchStart.x, touchStart.y, endX, endY, dt);
-  }
+screenArea.addEventListener('mousedown', (e) => {
+  if (e.target !== canvas || drawerOpen || kbdOpen) return;
+  const p = getRelXY(e);
+  touchStart = { ...p, time: Date.now() };
+});
+screenArea.addEventListener('mouseup', (e) => {
+  if (!touchStart) return;
+  const p = getRelXY(e);
+  const dx = p.x - touchStart.x, dy = p.y - touchStart.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  const dt = Date.now() - touchStart.time;
+  if (dist < 0.02 && dt < 350) sendTap(touchStart.x, touchStart.y);
+  else if (dist >= 0.02) sendSwipe(touchStart.x, touchStart.y, p.x, p.y, Math.max(dt, 80));
   touchStart = null;
 });
 
-canvas.addEventListener('click', (e) => {
-  const rect = canvas.getBoundingClientRect();
-  const x = (e.clientX - rect.left) / rect.width;
-  const y = (e.clientY - rect.top) / rect.height;
-  sendTap(x, y);
+function sendTap(x, y) {
+  fetch(API+'/devices/'+deviceId+'/input', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type:'tap',x,y})}).catch(()=>{});
+}
+function sendSwipe(x1,y1,x2,y2,dur) {
+  fetch(API+'/devices/'+deviceId+'/input', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type:'swipe',x1,y1,x2,y2,duration:dur})}).catch(()=>{});
+}
+function sendKey(k) {
+  fetch(API+'/devices/'+deviceId+'/input', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type:'key',keycode:k})}).catch(()=>{});
+}
+
+// ─── GESTURE BAR ─────────────────────────────────────
+let gs = null;
+const gbar = document.getElementById('gestureBar');
+gbar.addEventListener('touchstart', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  gs = {x:e.touches[0].clientX, y:e.touches[0].clientY, t:Date.now()};
+},{passive:false});
+gbar.addEventListener('touchend', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  if (!gs) return;
+  const t = e.changedTouches[0];
+  const dy = gs.y - t.clientY, dx = t.clientX - gs.x, dt = Date.now() - gs.t;
+  if (dy > 30) sendKey('KEYCODE_HOME');
+  else if (Math.abs(dx) > 50) sendKey('KEYCODE_BACK');
+  else if (dt > 350) sendKey('KEYCODE_APP_SWITCH');
+  else sendKey('KEYCODE_HOME');
+  gs = null;
+},{passive:false});
+document.getElementById('gesturePill').addEventListener('click', () => sendKey('KEYCODE_HOME'));
+
+// ─── KEYBOARD ────────────────────────────────────────
+function toggleKeyboard() {
+  kbdOpen = !kbdOpen;
+  document.getElementById('kbdBar').classList.toggle('open', kbdOpen);
+  if (kbdOpen) { closeDrawer(); document.getElementById('kbdInput').focus(); }
+}
+function sendTypedText() {
+  const el = document.getElementById('kbdInput');
+  if (!el.value) return;
+  fetch(API+'/devices/'+deviceId+'/input', {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type:'text',text:el.value})}).then(()=>{el.value='';}).catch(()=>{});
+}
+document.getElementById('kbdInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); sendTypedText(); }
 });
 
-function sendTap(x, y) {
-  fetch('/api/devices/' + deviceId + '/input', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({type:'tap', x: x, y: y})
-  }).catch(() => {});
+// ─── DRAWER ──────────────────────────────────────────
+function toggleDrawer() { drawerOpen ? closeDrawer() : openDrawer(); }
+function openDrawer() { drawerOpen = true; document.getElementById('drawer').classList.add('open'); document.getElementById('fabBtn').style.display='none'; }
+function closeDrawer() { drawerOpen = false; document.getElementById('drawer').classList.remove('open'); document.getElementById('fabBtn').style.display=''; }
+
+// ─── QUICK ACTIONS ───────────────────────────────────
+function quickAction(a) {
+  closeDrawer();
+  switch(a) {
+    case 'home': sendKey('KEYCODE_HOME'); break;
+    case 'back': sendKey('KEYCODE_BACK'); break;
+    case 'recents': sendKey('KEYCODE_APP_SWITCH'); break;
+    case 'keyboard': toggleKeyboard(); break;
+    case 'chrome': sendKey('KEYCODE_EXPLORER'); break;
+    case 'settings': sendKey('KEYCODE_SETTINGS'); break;
+    case 'screenshot': takeScreenshot(); break;
+    case 'fullscreen': goFullscreen(); break;
+  }
 }
 
-function sendSwipe(x1, y1, x2, y2, duration) {
-  fetch('/api/devices/' + deviceId + '/input', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({type:'swipe', x1:x1, y1:y1, x2:x2, y2:y2, duration: duration})
-  }).catch(() => {});
+// ─── AI AGENT ────────────────────────────────────────
+function startAgentTask() {
+  const el = document.getElementById('aiPrompt');
+  const prompt = el.value.trim();
+  if (!prompt) return;
+  const btn = document.getElementById('aiBtn');
+  btn.disabled = true; btn.textContent = '...';
+  closeDrawer();
+  fetch(API+'/agent/task/'+deviceId, {method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({prompt,model:'hermes3:8b',max_steps:25})
+  }).then(r=>r.json()).then(d => {
+    el.value=''; btn.disabled=false; btn.textContent='Run';
+    if (d.task_id) startTaskPoll(d.task_id);
+  }).catch(() => { btn.disabled=false; btn.textContent='Run'; });
+}
+document.getElementById('aiPrompt').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); startAgentTask(); }
+});
+
+function startTaskPoll(id) {
+  currentTaskId = id;
+  showToast('RUNNING','Agent working...','running');
+  if (taskPollTimer) clearInterval(taskPollTimer);
+  taskPollTimer = setInterval(() => pollTask(id), 2000);
+}
+function pollTask(id) {
+  fetch(API+'/agent/task/'+deviceId+'/'+id).then(r=>r.json()).then(d => {
+    const last = d.actions?.length ? d.actions[d.actions.length-1] : null;
+    const desc = last ? last.action+': '+(last.reasoning||'').substring(0,50) : '';
+    if (d.status==='running') showToast('STEP '+(d.steps_taken||0), desc||'Working...','running');
+    else if (d.status==='completed') { showToast('DONE',d.result||'Complete','done'); clearInterval(taskPollTimer); setTimeout(hideToast,4000); }
+    else if (d.status==='failed'||d.status==='stopped') { showToast('FAIL',d.error||'Failed','fail'); clearInterval(taskPollTimer); setTimeout(hideToast,4000); }
+  }).catch(()=>{});
+}
+function showToast(b,t,c) {
+  document.getElementById('toastBadge').textContent=b;
+  document.getElementById('toastBadge').className='badge '+(c||'running');
+  document.getElementById('toastText').textContent=t;
+  document.getElementById('toast').classList.add('show');
+}
+function hideToast() { document.getElementById('toast').classList.remove('show'); }
+
+function takeScreenshot() {
+  fetch(API+'/devices/'+deviceId+'/screenshot').then(r=>r.ok?r.blob():null).then(b=>{
+    if(!b)return; const u=URL.createObjectURL(b); const a=document.createElement('a');
+    a.href=u; a.download=deviceId+'-'+Date.now()+'.jpg'; a.click(); URL.revokeObjectURL(u);
+  }).catch(()=>{});
 }
 
-function sendKey(keycode) {
-  fetch('/api/devices/' + deviceId + '/input', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({type:'key', keycode: keycode})
-  }).catch(() => {});
-}
+// ─── AUTO-FULLSCREEN on first touch ──────────────────
+let didFullscreen = false;
+document.addEventListener('touchstart', () => {
+  if (!didFullscreen) { goFullscreen(); didFullscreen = true; }
+}, {once: true});
 
-function toggleSettings() {
-  window.location.href = '/#devices';
-}
-
-if (deviceId) {
-  connect();
-} else {
-  status.textContent = 'No device ID — use /mobile#dev-xxx or ?device=dev-xxx';
-  status.className = 'error';
-}
+// ─── INIT ────────────────────────────────────────────
+if (deviceId) connect();
 </script>
 </body>
 </html>
