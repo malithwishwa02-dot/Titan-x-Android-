@@ -40,7 +40,7 @@ services:
   # WS-SCRCPY — H264 device screen streaming + multi-touch
   # ═══════════════════════════════════════════════════════════════════
   ws-scrcpy:
-    image: pocketbook/ws-scrcpy:latest
+    image: scavin/ws-scrcpy:latest
     container_name: titan-scrcpy
     restart: unless-stopped
     network_mode: host

@@ -21,12 +21,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path in PUBLIC_PATHS or path.startswith("/static"):
             return await call_next(request)
 
-        # Skip auth if no secret configured (dev mode)
-        secret = os.environ.get("TITAN_API_SECRET", "")
-        if not secret:
+        # Skip auth entirely if no secret is configured (dev mode / first deploy)
+        secret = os.environ.get("TITAN_API_SECRET", "").strip()
+        if not secret or secret == "change-me-to-a-secure-random-string":
             return await call_next(request)
 
-        # Require auth for /api/* endpoints
+        # Require auth for /api/* and /ws/* endpoints
         if path.startswith("/api/") or path.startswith("/ws/"):
             auth_header = request.headers.get("Authorization", "")
             if not auth_header.startswith("Bearer "):

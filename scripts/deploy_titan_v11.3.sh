@@ -77,7 +77,7 @@ EOF
 echo "[3/8] Pulling Docker images..."
 docker pull redroid/redroid:14.0.0-latest
 docker pull redroid/redroid:15.0.0-latest
-docker pull pocketbook/ws-scrcpy:latest
+docker pull scavin/ws-scrcpy:latest
 docker pull nginx:alpine
 docker pull searxng/searxng:latest
 
@@ -129,7 +129,6 @@ Restart=always
 RestartSec=5
 MemoryMax=2G
 CPUQuota=200%
-WatchdogSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -147,7 +146,7 @@ ExecStartPre=-/usr/bin/docker rm -f titan-scrcpy
 ExecStart=/usr/bin/docker run --rm --name titan-scrcpy \
     --network host \
     -v /root/.android:/root/.android \
-    pocketbook/ws-scrcpy:latest
+    scavin/ws-scrcpy:latest
 Restart=always
 RestartSec=5
 MemoryMax=512M
