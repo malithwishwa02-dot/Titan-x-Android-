@@ -10,14 +10,20 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import time
 import requests
 
 API_BASE = "https://developers.hostinger.com/api/vps/v1"
-API_TOKEN = "8krvdnkOZGasRYIkHzuLBXYMTOB7kgXQOx0Ark01829491a9"
-VPS_ID = "1400969"  # KVM 8: 72.62.72.48 — 8 CPU, 32GB RAM, 400GB disk
+API_TOKEN = os.environ.get("HOSTINGER_API_TOKEN", "")
+VPS_ID = os.environ.get("HOSTINGER_VPS_ID", "1400969")
 SSH_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILYyQ53CiIeSgcBPPyQ6SzLQbuDHbaIyo2BRPwdUf1fd titan@v11"
+
+if not API_TOKEN:
+    print("ERROR: Set HOSTINGER_API_TOKEN environment variable (or in .env)")
+    print("  export HOSTINGER_API_TOKEN=your-token-here")
+    sys.exit(1)
 
 HEADERS = {
     "Authorization": f"Bearer {API_TOKEN}",

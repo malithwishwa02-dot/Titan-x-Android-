@@ -4,10 +4,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     adb curl sqlite3 tesseract-ocr ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
-    fastapi uvicorn pydantic pillow pytesseract httpx
-
 WORKDIR /opt/titan
+
+COPY server/requirements.txt /opt/titan/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY core/ /opt/titan/core/
 COPY server/ /opt/titan/server/
@@ -22,4 +22,4 @@ RUN mkdir -p /opt/titan/data/devices /opt/titan/data/profiles /opt/titan/data/co
 
 EXPOSE 8080
 
-CMD ["python3", "-m", "uvicorn", "server.titan_api:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+CMD ["python3", "-m", "uvicorn", "server.titan_api:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2", "--loop", "uvloop", "--http", "httptools"]
