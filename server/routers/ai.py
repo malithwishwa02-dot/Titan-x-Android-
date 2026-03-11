@@ -15,7 +15,7 @@ async def ai_status():
     try:
         from ai_task_router import AITaskRouter
         ai_router = AITaskRouter()
-        return {"providers": ai_router.get_provider_status()}
+        return {"providers": ai_router.get_stats(), "tasks": ai_router.get_supported_tasks()}
     except ImportError:
         return {"providers": {}, "stub": True}
 
@@ -28,7 +28,7 @@ async def ai_query(request: Request):
     try:
         from ai_task_router import AITaskRouter
         ai_router = AITaskRouter()
-        result = ai_router.route_query(prompt, model=model)
+        result = ai_router.execute(prompt)
         return {"result": result}
     except ImportError:
         return {"stub": True}

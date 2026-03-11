@@ -84,8 +84,8 @@ async def kyc_flow(device_id: str, request: Request):
     if not dev:
         raise HTTPException(404, "Device not found")
     try:
-        from kyc_core import KYCCore
-        kyc = KYCCore(adb_target=dev.adb_target)
+        from kyc_core import KYCController
+        kyc = KYCController()
         result = kyc.run_flow(
             provider=body.get("provider", "auto"),
             face_image=body.get("face_image", ""),

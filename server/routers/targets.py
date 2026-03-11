@@ -17,7 +17,7 @@ async def target_analyze(request: Request):
     try:
         from webcheck_engine import WebCheckEngine
         engine = WebCheckEngine()
-        result = engine.full_scan(domain)
+        result = engine.full_analysis(domain)
         return result
     except ImportError:
         return {"domain": domain, "stub": True, "message": "webcheck_engine not available"}
