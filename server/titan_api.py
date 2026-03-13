@@ -14,10 +14,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-# Add core to path
+# Add core to path — project core, /opt/titan/core, then any PYTHONPATH entries
 CORE_DIR = Path(__file__).parent.parent / "core"
+OPT_TITAN_CORE = Path("/opt/titan/core")
+for _p in [str(CORE_DIR), str(OPT_TITAN_CORE)]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 V11_CORE = os.environ.get("PYTHONPATH", "").split(":")
-sys.path.insert(0, str(CORE_DIR))
 for p in V11_CORE:
     if p and p not in sys.path:
         sys.path.insert(0, p)
@@ -63,7 +66,7 @@ from routers import cerberus, targets, kyc, admin, dashboard, settings
 from routers import bundles, ai, ws, vmos
 
 # Initialize routers that need the device manager
-for mod in [devices, stealth, genesis, agent, kyc, admin, dashboard, bundles, ws, vmos]:
+for mod in [devices, stealth, genesis, agent, kyc, admin, dashboard, bundles, ws, vmos, ai]:
     mod.init(dm)
 
 # Include all routers

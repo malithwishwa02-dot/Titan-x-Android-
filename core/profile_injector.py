@@ -179,6 +179,9 @@ class ProfileInjector:
         # ── Phase 6: Compute trust score ──
         self.result.trust_score = self._compute_trust_score(profile, card_data)
 
+        # ── Phase 7: Backdate filesystem timestamps ──
+        self._backdate_timestamps(profile)
+
         logger.info(f"Injection complete: {self.result.to_dict()}")
         return self.result
 
@@ -301,6 +304,7 @@ class ProfileInjector:
             _adb_shell(self.target, f"mkdir -p {remote_dir}")
 
             if _adb_push(self.target, tmp_path, f"{remote_dir}/titan_usage.json"):
+                _adb_shell(self.target, f"restorecon -R {remote_dir} 2>/dev/null")
                 self.result.app_usage_ok = True
                 logger.info(f"  App usage: {len(app_usage)} app records")
 
@@ -477,7 +481,14 @@ class ProfileInjector:
 
             # Push back to device
             if _adb_push(self.target, tmp_path, f"{self.CHROME_DATA}/Cookies"):
-                _adb_shell(self.target, f"chown u0_a Chrome:u0_a Chrome {self.CHROME_DATA}/Cookies 2>/dev/null")
+                # Fix ownership: get Chrome's UID and set it properly
+                chrome_uid = _adb_shell(self.target,
+                    "stat -c %U /data/data/com.android.chrome 2>/dev/null || "
+                    "ls -ld /data/data/com.android.chrome | awk '{print $3}'").strip()
+                if chrome_uid:
+                    _adb_shell(self.target, f"chown {chrome_uid}:{chrome_uid} {self.CHROME_DATA}/Cookies")
+                _adb_shell(self.target, f"chmod 660 {self.CHROME_DATA}/Cookies")
+                _adb_shell(self.target, f"restorecon -R {self.CHROME_DATA} 2>/dev/null")
                 self.result.cookies_injected = count
                 logger.info(f"  Cookies: {count} injected")
             else:
@@ -559,6 +570,7 @@ class ProfileInjector:
             conn.close()
 
             if _adb_push(self.target, tmp_path, f"{self.CHROME_DATA}/History"):
+                _adb_shell(self.target, f"restorecon -R {self.CHROME_DATA} 2>/dev/null")
                 self.result.history_injected = count
                 logger.info(f"  History: {count} URLs injected")
 
@@ -696,6 +708,7 @@ class ProfileInjector:
         _adb_shell(self.target,
             "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
             "-d file:///sdcard/DCIM/Camera/")
+        _adb_shell(self.target, "restorecon -R /sdcard/DCIM/Camera/ 2>/dev/null")
 
         self.result.photos_injected = count
         logger.info(f"  Gallery: {count} photos pushed")
@@ -720,3 +733,43 @@ class ProfileInjector:
             logger.info(f"  Autofill: profile data queued ({name}, {email})")
 
         self.result.autofill_injected = count
+
+    # ─── TIMESTAMP BACKDATING ─────────────────────────────────────────
+
+    def _backdate_timestamps(self, profile: Dict[str, Any]):
+        """Backdate mtime of all injected files to match profile age.
+
+        Without this, all files have 'created just now' timestamps which
+        is a forensic indicator of synthetic injection.
+        """
+        age_days = profile.get("age_days", 90)
+        now = time.time()
+
+        # Map package directories to their appropriate age offset
+        paths_to_backdate = [
+            (self.CHROME_DATA, age_days),
+            ("/data/data/com.android.chrome/app_chrome/Default", age_days),
+            ("/data/data/com.google.android.gms/shared_prefs", age_days - random.randint(0, 5)),
+            ("/data/data/com.google.android.gsf/shared_prefs", age_days - random.randint(0, 3)),
+            ("/data/data/com.android.vending/shared_prefs", age_days - random.randint(5, 15)),
+            ("/data/system_ce/0", age_days),
+            ("/data/system_de/0", age_days),
+            ("/sdcard/DCIM/Camera", age_days),
+        ]
+
+        cmds = []
+        for path, backdate_days in paths_to_backdate:
+            # Vary each file/dir by a few hours to avoid "all same timestamp"
+            hours_var = random.randint(1, 72)
+            ts = now - (backdate_days * 86400) - (hours_var * 3600)
+            touch_fmt = time.strftime("%Y%m%d%H%M.%S", time.gmtime(ts))
+            cmds.append(f"find {path} -maxdepth 2 -exec touch -t {touch_fmt} {{}} + 2>/dev/null")
+
+            # Also backdate parent directory itself with slight offset
+            parent_ts = ts - random.randint(3600, 86400)
+            parent_fmt = time.strftime("%Y%m%d%H%M.%S", time.gmtime(parent_ts))
+            cmds.append(f"touch -t {parent_fmt} {path} 2>/dev/null")
+
+        if cmds:
+            _adb_shell(self.target, "; ".join(cmds))
+            logger.info(f"  Timestamps: backdated {len(paths_to_backdate)} directories")

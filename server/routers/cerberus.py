@@ -30,7 +30,8 @@ async def cerberus_validate(request: Request):
     if engine:
         try:
             import dataclasses, json, inspect
-            card_input = body.get("card_input", body.get("number", ""))
+            # UI sends 'card'; also support card_input/number for compatibility
+            card_input = body.get("card") or body.get("card_input") or body.get("number", "")
             # Parse card string into CardAsset first
             parsed = engine.parse_card_input(card_input)
             result = engine.validate(parsed)

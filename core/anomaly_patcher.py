@@ -265,17 +265,84 @@ class AnomalyPatcher:
         for prop, val in runtime_emu.items():
             self._record(f"emu:{prop}", True, val)
 
-        # Hide /proc/cmdline (contains androidboot.hardware=redroid)
-        self._sh("mount -o bind /dev/null /proc/cmdline 2>/dev/null")
-        self._record("hide_proc_cmdline", True, "bind-mount to /dev/null")
+        # Hide /proc/cmdline — write a sterile version instead of /dev/null
+        # /dev/null bind-mounts are trivially detected via /proc/mounts
+        self._create_sterile_proc_file(
+            source="/proc/cmdline",
+            dest="/data/titan/proc_cmdline_clean",
+            strip_patterns=["androidboot.hardware=redroid", "androidboot.hardware=vbox",
+                            "docker", "containerd", "lxc", "init=/sbin/init"],
+            fallback="androidboot.verifiedbootstate=green androidboot.slot_suffix=_a",
+        )
+        self._sh("mount -o bind /data/titan/proc_cmdline_clean /proc/cmdline 2>/dev/null")
+        self._record("hide_proc_cmdline", True, "sterile file bind-mount")
 
-        # Hide Docker cgroup artifacts
-        self._sh("mount -o bind /dev/null /proc/1/cgroup 2>/dev/null")
-        self._record("hide_cgroup", True, "bind-mount")
+        # Hide Docker cgroup artifacts — write a clean cgroup file
+        self._create_sterile_proc_file(
+            source="/proc/1/cgroup",
+            dest="/data/titan/cgroup_clean",
+            strip_patterns=["docker", "containerd", "lxc", "kubepods", "system.slice"],
+            fallback="0::/",
+        )
+        self._sh("mount -o bind /data/titan/cgroup_clean /proc/1/cgroup 2>/dev/null")
+        self._record("hide_cgroup", True, "sterile file bind-mount")
+
+        # Scrub /proc/mounts and /proc/self/mountinfo to remove bind-mount evidence
+        self._scrub_proc_mounts()
 
         # Rename eth0 to wlan0 (real phones don't have eth0)
         self._sh("ip link set eth0 down 2>/dev/null; ip link set eth0 name wlan0 2>/dev/null; ip link set wlan0 up 2>/dev/null")
         self._record("rename_eth0_wlan0", True, "network interface renamed")
+
+    # ─── STERILE PROC HELPERS ─────────────────────────────────────────
+
+    def _create_sterile_proc_file(self, source: str, dest: str,
+                                   strip_patterns: List[str], fallback: str):
+        """Read a /proc file, strip container artifacts, write a clean version."""
+        self._sh("mkdir -p /data/titan")
+        ok, content = self._sh(f"cat {source} 2>/dev/null")
+        if ok and content:
+            for pattern in strip_patterns:
+                # Remove tokens containing the pattern
+                parts = content.split()
+                parts = [p for p in parts if pattern.lower() not in p.lower()]
+                content = " ".join(parts)
+            if not content.strip():
+                content = fallback
+        else:
+            content = fallback
+        # Write via echo to avoid needing a tmp file
+        escaped = content.replace("'", "'\\''")
+        self._sh(f"echo '{escaped}' > {dest}")
+
+    def _scrub_proc_mounts(self):
+        """Filter /proc/mounts to hide bind-mount evidence from /dev/null."""
+        self._sh("mkdir -p /data/titan")
+        # Read current mounts, strip lines binding /dev/null over /proc paths
+        scrub_script = (
+            "cat /proc/mounts | grep -v '/proc/cmdline' | grep -v '/proc/1/cgroup' "
+            "> /data/titan/mounts_clean 2>/dev/null; "
+            "mount -o bind /data/titan/mounts_clean /proc/mounts 2>/dev/null"
+        )
+        ok, _ = self._sh(scrub_script, timeout=10)
+        self._record("scrub_proc_mounts", ok, "bind-mount evidence removed")
+
+    def _patch_adb_concealment(self):
+        """Conceal ADB daemon — redirect to non-standard port and hide traces."""
+        logger.info("ADB concealment (lockdown mode)")
+        cmds = [
+            # Move ADB to non-standard port
+            "setprop service.adb.tcp.port 41337",
+            # Hide standard ADB indicators
+            "settings put global adb_enabled 0",
+            "settings put global development_settings_enabled 0",
+            # Clear USB debugging notification
+            "settings put secure adb_notify 0",
+            # Hide ADB from process list
+            "setprop persist.titan.adb.concealed 1",
+        ]
+        self._sh("; ".join(cmds), timeout=15)
+        self._record("adb_concealment", True, "port=41337, indicators hidden")
 
     # ─── PHASE 4: BUILD & BOOT VERIFICATION ──────────────────────────
 
@@ -493,7 +560,7 @@ class AnomalyPatcher:
     def _patch_sensors(self, preset: DevicePreset):
         logger.info("Phase 12: Sensor data injection")
 
-        # Simulate realistic sensor hardware presence
+        # Set sensor hardware presence flags
         sensor_props = {
             "persist.titan.sensor.accelerometer": "1",
             "persist.titan.sensor.gyroscope": "1",
@@ -506,6 +573,16 @@ class AnomalyPatcher:
         self._batch_setprop(sensor_props)
         for prop, val in sensor_props.items():
             self._record(f"sensor:{prop}", True, val)
+
+        # Initialize background sensor noise with device-accurate OADEV profiles
+        try:
+            from sensor_simulator import SensorSimulator
+            sim = SensorSimulator(adb_target=self.target, brand=preset.brand)
+            sim.start_background_noise()
+            self._record("sensor_noise_init", True, f"OADEV profile: {preset.brand}")
+        except Exception as e:
+            logger.warning(f"Sensor simulator init failed: {e}")
+            self._record("sensor_noise_init", False, str(e))
 
     # ─── PHASE 13: BLUETOOTH PAIRED DEVICES ──────────────────────────
 
@@ -604,14 +681,47 @@ class AnomalyPatcher:
 
     # ─── PHASE 17: WIFI SCAN RESULTS ─────────────────────────────────
 
-    def _patch_wifi_scan(self):
+    def _patch_wifi_scan(self, location_name: str = ""):
         logger.info("Phase 17: WiFi scan results")
 
-        ssid_pool = [
-            "NETGEAR72-5G", "Xfinity-Home", "ATT-FIBER", "Spectrum-5G",
-            "TP-Link_5G_A3", "linksys-5g", "DIRECT-roku", "HP-Print-42",
-            "CenturyLink5G", "Google-Fiber", "FiOS-5G", "MySpectrumWiFi",
-        ]
+        # Locale-aware SSID pools — ISP-specific router names by region
+        SSID_POOLS = {
+            "US": [
+                "NETGEAR72-5G", "Xfinity-Home", "ATT-FIBER", "Spectrum-5G",
+                "TP-Link_5G_A3", "linksys-5g", "DIRECT-roku", "HP-Print-42",
+                "CenturyLink5G", "Google-Fiber", "FiOS-5G", "MySpectrumWiFi",
+            ],
+            "GB": [
+                "BT-Hub6-5G", "Sky-WiFi-Home", "Virgin-Media-5G", "TalkTalk-5G",
+                "PlusNet-WiFi", "EE-Home-5G", "Vodafone-Home", "ThreeHomeFi",
+            ],
+            "DE": [
+                "FRITZ!Box-7590", "Telekom-5G", "Vodafone-Home-5G", "o2-WLAN",
+                "Unitymedia-5G", "1und1-WLAN", "Congstar-Home", "NetAachen",
+            ],
+            "FR": [
+                "Livebox-5G", "Freebox-5G", "SFR-Home", "Bouygues-5G",
+                "Orange-WiFi", "RED-Home", "Free-Mini4K", "SFR-Fibre",
+            ],
+            "default": [
+                "NETGEAR72-5G", "Xfinity-Home", "ATT-FIBER", "Spectrum-5G",
+                "TP-Link_5G_A3", "linksys-5g", "DIRECT-roku", "HP-Print-42",
+                "CenturyLink5G", "Google-Fiber", "FiOS-5G", "MySpectrumWiFi",
+            ],
+        }
+
+        # Determine locale from location name
+        locale = "US"
+        if location_name:
+            loc_lower = location_name.lower()
+            if any(k in loc_lower for k in ["london", "manchester", "birmingham", "uk", "gb"]):
+                locale = "GB"
+            elif any(k in loc_lower for k in ["berlin", "munich", "frankfurt", "hamburg", "de"]):
+                locale = "DE"
+            elif any(k in loc_lower for k in ["paris", "lyon", "marseille", "fr"]):
+                locale = "FR"
+
+        ssid_pool = SSID_POOLS.get(locale, SSID_POOLS["default"])
         num_visible = random.randint(5, 10)
         selected = random.sample(ssid_pool, min(num_visible, len(ssid_pool)))
 
@@ -644,8 +754,13 @@ class AnomalyPatcher:
     # FULL PATCH PIPELINE (18 phases, 65+ vectors)
     # ═══════════════════════════════════════════════════════════════════
 
-    def full_patch(self, preset_name: str, carrier_name: str, location_name: str) -> PatchReport:
-        """Run all 18 phases of anomaly patching (65+ vectors)."""
+    def full_patch(self, preset_name: str, carrier_name: str, location_name: str,
+                   lockdown: bool = False) -> PatchReport:
+        """Run all 18 phases of anomaly patching (65+ vectors).
+
+        Args:
+            lockdown: If True, conceal ADB and apply final production hardening.
+        """
         self._results = []
         preset = get_preset(preset_name)
         carrier = CARRIERS.get(carrier_name)
@@ -677,8 +792,12 @@ class AnomalyPatcher:
         self._patch_proc_info(preset)
         self._patch_camera_info(preset)
         self._patch_nfc_storage(preset)
-        self._patch_wifi_scan()
+        self._patch_wifi_scan(location_name=location_name)
         self._patch_selinux_accessibility()
+
+        # Optional: ADB concealment for production lockdown
+        if lockdown:
+            self._patch_adb_concealment()
 
         passed = sum(1 for r in self._results if r.success)
         total = len(self._results)
@@ -708,6 +827,12 @@ class AnomalyPatcher:
         checks["secure_on"] = self._getprop("ro.secure") == "1"
         checks["build_type_user"] = self._getprop("ro.build.type") == "user"
         checks["release_keys"] = "release-keys" in self._getprop("ro.build.tags")
+
+        # Proc stealth — verify /proc/cmdline is NOT /dev/null in mounts
+        _, mounts = self._sh("cat /proc/self/mountinfo 2>/dev/null | grep cmdline")
+        checks["proc_cmdline_sterile"] = "/dev/null" not in mounts
+        _, cgroup_mounts = self._sh("cat /proc/self/mountinfo 2>/dev/null | grep cgroup")
+        checks["proc_cgroup_sterile"] = "/dev/null" not in cgroup_mounts
 
         # Boot verification
         checks["verified_boot_green"] = self._getprop("ro.boot.verifiedbootstate") == "green"

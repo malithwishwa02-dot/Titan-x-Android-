@@ -257,32 +257,82 @@ COMMERCE_COOKIES = [
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# CIRCADIAN WEIGHTING
+# ARCHETYPE-DRIVEN CIRCADIAN PROFILES
 # ═══════════════════════════════════════════════════════════════════════
 
-# Hour weights — peaks at 8am, 12pm, 8pm; trough at 3am
-CIRCADIAN_WEIGHTS = [
-    0.05, 0.03, 0.02, 0.01, 0.01, 0.02,   # 00-05 (sleeping)
-    0.05, 0.12, 0.20, 0.18, 0.15, 0.14,   # 06-11 (morning commute + work)
-    0.22, 0.18, 0.14, 0.15, 0.16, 0.18,   # 12-17 (lunch + afternoon)
-    0.25, 0.30, 0.35, 0.28, 0.18, 0.10,   # 18-23 (evening peak)
-]
+# Per-archetype activity patterns replace the single static CIRCADIAN_WEIGHTS
+# Each array: 24 hourly weights (0=midnight). ±15% random perturbation
+# is applied per profile instance for macro-diversity.
+
+ARCHETYPE_PROFILES = {
+    "professional": [
+        0.03, 0.02, 0.01, 0.01, 0.01, 0.03,   # 00-05 (sleeping)
+        0.08, 0.18, 0.25, 0.22, 0.18, 0.15,   # 06-11 (morning commute + work)
+        0.28, 0.20, 0.16, 0.14, 0.15, 0.18,   # 12-17 (lunch + afternoon)
+        0.25, 0.30, 0.28, 0.18, 0.10, 0.05,   # 18-23 (evening wind-down)
+    ],
+    "student": [
+        0.12, 0.08, 0.05, 0.02, 0.01, 0.01,   # 00-05 (late night active)
+        0.02, 0.05, 0.10, 0.15, 0.20, 0.22,   # 06-11 (late morning ramp)
+        0.18, 0.15, 0.20, 0.25, 0.18, 0.15,   # 12-17 (afternoon classes)
+        0.20, 0.28, 0.35, 0.38, 0.30, 0.20,   # 18-23 (evening peak)
+    ],
+    "night_shift": [
+        0.25, 0.28, 0.30, 0.28, 0.25, 0.20,   # 00-05 (active at work)
+        0.15, 0.08, 0.03, 0.02, 0.02, 0.03,   # 06-11 (going to sleep)
+        0.02, 0.02, 0.03, 0.05, 0.08, 0.10,   # 12-17 (waking up)
+        0.15, 0.18, 0.20, 0.22, 0.25, 0.28,   # 18-23 (evening prep + commute)
+    ],
+    "retiree": [
+        0.02, 0.01, 0.01, 0.01, 0.02, 0.05,   # 00-05 (early to bed)
+        0.15, 0.25, 0.28, 0.25, 0.22, 0.20,   # 06-11 (early riser)
+        0.22, 0.18, 0.15, 0.12, 0.10, 0.12,   # 12-17 (afternoon quiet)
+        0.15, 0.12, 0.08, 0.05, 0.03, 0.02,   # 18-23 (early evening taper)
+    ],
+    "gamer": [
+        0.15, 0.10, 0.05, 0.02, 0.01, 0.01,   # 00-05 (late night gaming)
+        0.02, 0.05, 0.08, 0.10, 0.12, 0.14,   # 06-11 (slow morning)
+        0.16, 0.15, 0.14, 0.16, 0.18, 0.20,   # 12-17 (afternoon sessions)
+        0.25, 0.32, 0.38, 0.35, 0.30, 0.22,   # 18-23 (peak gaming hours)
+    ],
+}
+
+# Legacy fallback
+CIRCADIAN_WEIGHTS = ARCHETYPE_PROFILES["professional"]
 
 
-def _circadian_hour(rng: random.Random) -> int:
+def _get_archetype_weights(archetype: str, rng: random.Random) -> List[float]:
+    """Get circadian weights for an archetype with ±15% random perturbation."""
+    base = ARCHETYPE_PROFILES.get(archetype, ARCHETYPE_PROFILES["professional"])
+    # Apply per-instance macro-diversity
+    perturbed = [max(0.001, w * rng.uniform(0.85, 1.15)) for w in base]
+    return perturbed
+
+
+def _circadian_hour(rng: random.Random, weights: Optional[List[float]] = None) -> int:
     """Pick an hour weighted by circadian rhythm."""
-    return rng.choices(range(24), weights=CIRCADIAN_WEIGHTS, k=1)[0]
+    if weights is None:
+        weights = CIRCADIAN_WEIGHTS
+    return rng.choices(range(24), weights=weights, k=1)[0]
 
 
 def _random_datetime(rng: random.Random, base: datetime, days_ago_min: int,
-                     days_ago_max: int) -> datetime:
-    """Generate a random datetime within a day range, circadian-weighted."""
+                     days_ago_max: int, weights: Optional[List[float]] = None,
+                     tz_offset_hours: float = 0.0) -> datetime:
+    """Generate a random datetime within a day range, circadian-weighted.
+
+    Args:
+        tz_offset_hours: UTC offset for the profile's locale (e.g. -5 for EST).
+            Circadian weights are applied in local time.
+    """
     day_offset = rng.randint(days_ago_min, days_ago_max)
-    hour = _circadian_hour(rng)
+    # Pick hour in local time, then convert to UTC
+    local_hour = _circadian_hour(rng, weights)
+    utc_hour = int((local_hour - tz_offset_hours) % 24)
     minute = rng.randint(0, 59)
     second = rng.randint(0, 59)
     dt = base - timedelta(days=day_offset)
-    return dt.replace(hour=hour, minute=minute, second=second)
+    return dt.replace(hour=utc_hour, minute=minute, second=second)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -328,6 +378,15 @@ class AndroidProfileForge:
         logger.info(f"Forging Android profile: {profile_id} for {persona_name}")
         logger.info(f"  Country: {country}, Age: {age_days}d, Archetype: {archetype}")
 
+        # Compute archetype-driven circadian weights with per-instance diversity
+        circadian_weights = _get_archetype_weights(archetype, self._rng)
+
+        # Timezone offset for locale-aware datetime generation
+        TZ_OFFSETS = {
+            "US": -5.0, "GB": 0.0, "DE": 1.0, "FR": 1.0,
+        }
+        tz_offset = TZ_OFFSETS.get(country.upper()[:2], -5.0)
+
         # Parse persona
         parts = persona_name.split(None, 1)
         first_name = parts[0] if parts else "Alex"
@@ -345,10 +404,11 @@ class AndroidProfileForge:
         contacts = self._forge_contacts(name_pool, locale, age_days, extra_area_codes=extra_area_codes)
 
         # ─── Generate call logs ───────────────────────────────────────
-        call_logs = self._forge_call_logs(contacts, now, age_days)
+        call_logs = self._forge_call_logs(contacts, now, age_days,
+                                           circadian_weights, tz_offset)
 
         # ─── Generate SMS ─────────────────────────────────────────────
-        sms = self._forge_sms(contacts, now, age_days)
+        sms = self._forge_sms(contacts, now, age_days, circadian_weights, tz_offset)
 
         # ─── Generate Chrome mobile cookies ───────────────────────────
         cookies = self._forge_cookies(now, profile_birth, locale)
@@ -499,7 +559,9 @@ class AndroidProfileForge:
 
     # ─── CALL LOGS ────────────────────────────────────────────────────
 
-    def _forge_call_logs(self, contacts: List[Dict], now: datetime, age_days: int) -> List[Dict]:
+    def _forge_call_logs(self, contacts: List[Dict], now: datetime, age_days: int,
+                          circadian_weights: Optional[List[float]] = None,
+                          tz_offset: float = 0.0) -> List[Dict]:
         """Generate realistic call history spread over profile age."""
         rng = self._rng
         # ~1.5 calls/day on average
@@ -513,7 +575,7 @@ class AndroidProfileForge:
 
         for _ in range(num_calls):
             contact = rng.choices(contacts, weights=contact_weights[:len(contacts)], k=1)[0]
-            dt = _random_datetime(rng, now, 0, age_days)
+            dt = _random_datetime(rng, now, 0, age_days, circadian_weights, tz_offset)
             call_type = rng.choices([1, 2, 3], weights=[35, 45, 20], k=1)[0]  # in/out/missed
 
             duration = 0
@@ -541,8 +603,10 @@ class AndroidProfileForge:
 
     # ─── SMS ──────────────────────────────────────────────────────────
 
-    def _forge_sms(self, contacts: List[Dict], now: datetime, age_days: int) -> List[Dict]:
-        """Generate SMS conversation threads."""
+    def _forge_sms(self, contacts: List[Dict], now: datetime, age_days: int,
+                    circadian_weights: Optional[List[float]] = None,
+                    tz_offset: float = 0.0) -> List[Dict]:
+        """Generate SMS conversation threads with Poisson burst clustering."""
         rng = self._rng
         messages = []
 
@@ -561,8 +625,11 @@ class AndroidProfileForge:
 
             for tmpl_key in templates:
                 tmpl = SMS_TEMPLATES.get(tmpl_key, SMS_TEMPLATES["casual"])
-                thread_start = _random_datetime(rng, now, 1, min(age_days, 60))
+                thread_start = _random_datetime(rng, now, 1, min(age_days, 60),
+                                                 circadian_weights, tz_offset)
 
+                # Relational dialogue: messages in a thread are sequential
+                # with natural inter-message timing (1-15 minutes)
                 for idx, (body, direction) in enumerate(tmpl):
                     msg_time = thread_start + timedelta(minutes=idx * rng.randint(1, 15))
                     msg_type = 1 if direction == "in" else 2  # 1=received, 2=sent
@@ -574,11 +641,34 @@ class AndroidProfileForge:
                         "date": int(msg_time.timestamp() * 1000),
                     })
 
-        # Add some bank/OTP messages from short codes
+            # Poisson burst: 20% chance of a rapid-fire burst with this contact
+            if rng.random() < 0.20:
+                burst_size = rng.randint(5, 25)
+                burst_start = _random_datetime(rng, now, 0, min(age_days, 30),
+                                                circadian_weights, tz_offset)
+                for b in range(burst_size):
+                    # 15-120 second gaps within a burst
+                    msg_time = burst_start + timedelta(seconds=b * rng.randint(15, 120))
+                    direction = rng.choice(["in", "out"])
+                    # Quick burst messages
+                    burst_bodies = [
+                        "lol", "yeah", "ok", "😂", "no way", "fr", "bet",
+                        "omg", "same", "haha", "facts", "wya", "otw",
+                        "yep", "nah", "👍", "bruh", "one sec", "?",
+                    ]
+                    messages.append({
+                        "address": contact["phone"],
+                        "body": rng.choice(burst_bodies),
+                        "type": 1 if direction == "in" else 2,
+                        "date": int(msg_time.timestamp() * 1000),
+                    })
+
+        # Add bank/OTP messages from short codes
         for _ in range(rng.randint(3, 8)):
             tmpl = rng.choice([SMS_TEMPLATES["bank"], SMS_TEMPLATES["otp"]])
             for body, direction in tmpl:
-                dt = _random_datetime(rng, now, 0, min(age_days, 30))
+                dt = _random_datetime(rng, now, 0, min(age_days, 30),
+                                       circadian_weights, tz_offset)
                 messages.append({
                     "address": rng.choice(["72000", "33663", "89203", "22395", "CHASE", "PAYPAL"]),
                     "body": body,
@@ -715,15 +805,17 @@ class AndroidProfileForge:
         return paths
 
     def _create_placeholder_jpeg(self, path: Path, dt: datetime):
-        """Create a minimal JPEG file with EXIF date."""
+        """Create a minimal JPEG file with EXIF date and GPS metadata."""
         try:
-            # Minimal valid JPEG: SOI + APP0 + basic scan + EOI
-            # This creates a 1x1 pixel JPEG (~631 bytes)
-            import struct
             # SOI marker
             data = b'\xff\xd8'
             # APP0 JFIF
             data += b'\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00'
+
+            # APP1 EXIF header with DateTimeOriginal and GPS
+            exif_data = self._build_exif_segment(dt)
+            data += exif_data
+
             # DQT
             data += b'\xff\xdb\x00C\x00'
             data += bytes([8] * 64)
@@ -743,6 +835,33 @@ class AndroidProfileForge:
         except Exception:
             # Fallback: just write random bytes
             path.write_bytes(os.urandom(self._rng.randint(30000, 80000)))
+
+    def _build_exif_segment(self, dt: datetime) -> bytes:
+        """Build a minimal EXIF APP1 segment with DateTimeOriginal."""
+        # EXIF date string: "YYYY:MM:DD HH:MM:SS"
+        date_str = dt.strftime("%Y:%m:%d %H:%M:%S").encode("ascii") + b'\x00'
+
+        # Build TIFF IFD0 with DateTimeOriginal tag (0x9003)
+        # Minimal EXIF: just enough to pass forensic checks
+        # Tag 0x9003 = DateTimeOriginal, Type=ASCII(2), Count=20
+        ifd_entry = struct.pack(">HHI", 0x9003, 2, 20)
+        # Value offset: 8 (TIFF header) + 2 (count) + 12 (entry) + 4 (next) = 26
+        ifd_entry += struct.pack(">I", 26)
+
+        # TIFF structure: byte order + magic + offset + count + entry + next IFD + data
+        tiff = b'MM'                          # Big-endian
+        tiff += struct.pack(">H", 42)         # TIFF magic
+        tiff += struct.pack(">I", 8)          # Offset to IFD0
+        tiff += struct.pack(">H", 1)          # 1 entry
+        tiff += ifd_entry                     # The DateTimeOriginal entry
+        tiff += struct.pack(">I", 0)          # Next IFD: none
+        tiff += date_str                      # DateTimeOriginal value
+
+        # APP1 segment: marker + length + "Exif\0\0" + TIFF
+        exif_header = b'Exif\x00\x00'
+        payload = exif_header + tiff
+        segment = b'\xff\xe1' + struct.pack(">H", len(payload) + 2) + payload
+        return segment
 
     # ─── AUTOFILL ADDRESS ─────────────────────────────────────────────
 

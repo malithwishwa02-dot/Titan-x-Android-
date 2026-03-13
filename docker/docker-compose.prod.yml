@@ -59,6 +59,9 @@ services:
       - PYTHONPATH=/opt/titan/server:/opt/titan/core
       - TITAN_DATA=/opt/titan/data
       - TITAN_GPU_OLLAMA=${TITAN_GPU_OLLAMA:-http://host.docker.internal:11435}
+      - VMOS_API_KEY=${VMOS_API_KEY:-}
+      - VMOS_API_SECRET=${VMOS_API_SECRET:-}
+      - VMOS_API_HOST=${VMOS_API_HOST:-api.vmoscloud.com}
     command: >
       bash -c "
         pip install -q fastapi uvicorn pydantic pillow 2>/dev/null &&

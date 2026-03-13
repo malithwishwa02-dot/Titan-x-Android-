@@ -29,6 +29,9 @@ services:
       - TITAN_DATA=/opt/titan/data
       - TITAN_GPU_URL=${TITAN_GPU_URL:-http://127.0.0.1:8765}
       - TITAN_API_SECRET=${TITAN_API_SECRET:-}
+      - VMOS_API_KEY=${VMOS_API_KEY:-}
+      - VMOS_API_SECRET=${VMOS_API_SECRET:-}
+      - VMOS_API_HOST=${VMOS_API_HOST:-api.vmoscloud.com}
       - PYTHONPATH=/opt/titan/server:/opt/titan/core:/opt/titan/v11-core
     deploy:
       resources:

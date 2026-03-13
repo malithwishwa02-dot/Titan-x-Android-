@@ -19,8 +19,8 @@ async def target_analyze(request: Request):
         engine = WebCheckEngine()
         result = engine.full_analysis(domain)
         return result
-    except ImportError:
-        return {"domain": domain, "stub": True, "message": "webcheck_engine not available"}
+    except (ImportError, Exception) as e:
+        return {"domain": domain, "stub": True, "message": str(e)}
 
 
 @router.post("/waf")
@@ -32,8 +32,8 @@ async def target_waf(request: Request):
         detector = WAFDetector()
         result = detector.detect(domain)
         return {"domain": domain, "result": result}
-    except ImportError:
-        return {"domain": domain, "stub": True}
+    except (ImportError, Exception) as e:
+        return {"domain": domain, "stub": True, "waf_error": str(e)}
 
 
 @router.post("/dns")
@@ -43,10 +43,10 @@ async def target_dns(request: Request):
     try:
         from dns_intel import DNSIntel
         intel = DNSIntel()
-        result = intel.lookup(domain)
+        result = intel.get_all_records(domain)
         return {"domain": domain, "result": result}
-    except ImportError:
-        return {"domain": domain, "stub": True}
+    except (ImportError, Exception) as e:
+        return {"domain": domain, "stub": True, "error": str(e)}
 
 
 @router.post("/profiler")
@@ -54,9 +54,9 @@ async def target_profiler(request: Request):
     body = await request.json()
     domain = body.get("domain", "")
     try:
-        from target_profiler import TargetProfiler
-        profiler = TargetProfiler()
+        from target_profiler import TitanTargetProfiler
+        profiler = TitanTargetProfiler()
         result = profiler.profile(domain)
         return {"domain": domain, "result": result}
-    except ImportError:
-        return {"domain": domain, "stub": True}
+    except (ImportError, Exception) as e:
+        return {"domain": domain, "stub": True, "error": str(e)}

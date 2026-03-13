@@ -270,12 +270,20 @@ class GoogleAccountInjector:
                     )
                 account_id = c.lastrowid
 
-            # Insert auth tokens
+            # Insert auth tokens — expanded matrix covering core Google scopes
             token_types = [
                 ("com.google", auth_token),
                 ("oauth2:https://www.googleapis.com/auth/plus.me", f"ya29.{secrets.token_urlsafe(80)}"),
+                ("oauth2:https://www.googleapis.com/auth/userinfo.email", f"ya29.{secrets.token_urlsafe(80)}"),
+                ("oauth2:https://www.googleapis.com/auth/userinfo.profile", f"ya29.{secrets.token_urlsafe(80)}"),
+                ("oauth2:https://www.googleapis.com/auth/drive", f"ya29.{secrets.token_urlsafe(80)}"),
+                ("oauth2:https://www.googleapis.com/auth/youtube", f"ya29.{secrets.token_urlsafe(80)}"),
+                ("oauth2:https://www.googleapis.com/auth/calendar", f"ya29.{secrets.token_urlsafe(80)}"),
+                ("oauth2:https://www.googleapis.com/auth/contacts", f"ya29.{secrets.token_urlsafe(80)}"),
+                ("oauth2:https://www.googleapis.com/auth/gmail.readonly", f"ya29.{secrets.token_urlsafe(80)}"),
                 ("SID", secrets.token_hex(60)),
                 ("LSID", secrets.token_hex(60)),
+                ("oauth2:https://www.googleapis.com/auth/android", f"ya29.{secrets.token_urlsafe(80)}"),
             ]
 
             for token_type, token_value in token_types:
@@ -310,6 +318,7 @@ class GoogleAccountInjector:
             if _adb_push(self.target, tmp_path, self.ACCOUNTS_CE_PATH):
                 _adb_shell(self.target, f"chmod 600 {self.ACCOUNTS_CE_PATH}")
                 _adb_shell(self.target, f"chown system:system {self.ACCOUNTS_CE_PATH}")
+                _adb_shell(self.target, f"restorecon {self.ACCOUNTS_CE_PATH} 2>/dev/null")
                 result.accounts_ce_ok = True
                 logger.info(f"  accounts_ce.db: account {email} injected")
             else:
@@ -358,6 +367,7 @@ class GoogleAccountInjector:
             if _adb_push(self.target, tmp_path, self.ACCOUNTS_DE_PATH):
                 _adb_shell(self.target, f"chmod 600 {self.ACCOUNTS_DE_PATH}")
                 _adb_shell(self.target, f"chown system:system {self.ACCOUNTS_DE_PATH}")
+                _adb_shell(self.target, f"restorecon {self.ACCOUNTS_DE_PATH} 2>/dev/null")
                 result.accounts_de_ok = True
                 logger.info(f"  accounts_de.db: account {email} injected")
             else:
@@ -654,6 +664,7 @@ class GoogleAccountInjector:
                 if uid:
                     _adb_shell(self.target, f"chown {uid}:{uid} {remote_path}")
                 _adb_shell(self.target, f"chmod 660 {remote_path}")
+                _adb_shell(self.target, f"restorecon {remote_path} 2>/dev/null")
             else:
                 result.errors.append(f"Failed to push {remote_path}")
 

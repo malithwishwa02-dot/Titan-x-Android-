@@ -12,39 +12,59 @@ logger = logging.getLogger("titan.network")
 
 @router.get("/status")
 async def network_status():
+    import asyncio
     try:
         from mullvad_vpn import MullvadVPN
         vpn = MullvadVPN()
-        return vpn.get_status()
+        loop = asyncio.get_event_loop()
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, vpn.get_status),
+            timeout=3.0,
+        )
+        return result
+    except asyncio.TimeoutError:
+        return {"vpn": "timeout", "connected": False, "stub": True}
     except (ImportError, AttributeError):
         try:
             from mullvad_vpn import get_mullvad_status
-            return get_mullvad_status()
-        except ImportError:
+            import asyncio as _aio
+            loop = _aio.get_event_loop()
+            result = await _aio.wait_for(
+                loop.run_in_executor(None, get_mullvad_status), timeout=3.0
+            )
+            return result
+        except Exception:
             return {"vpn": "not_configured", "stub": True}
 
 
 @router.post("/vpn/connect")
 async def vpn_connect(request: Request):
+    import asyncio, functools
     body = await request.json()
     try:
         from mullvad_vpn import MullvadVPN
         vpn = MullvadVPN()
-        result = vpn.connect(
-            country=body.get("country", ""),
-            city=body.get("city", ""),
-        )
+        loop = asyncio.get_event_loop()
+        fn = functools.partial(vpn.connect, country=body.get("country", ""), city=body.get("city", ""))
+        result = await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=10.0)
         return result
+    except asyncio.TimeoutError:
+        return {"status": "timeout", "stub": True}
     except ImportError:
         return {"status": "vpn_module_unavailable", "stub": True}
 
 
 @router.post("/vpn/disconnect")
 async def vpn_disconnect():
+    import asyncio
     try:
         from mullvad_vpn import MullvadVPN
         vpn = MullvadVPN()
-        return vpn.disconnect()
+        loop = asyncio.get_event_loop()
+        result = await asyncio.wait_for(loop.run_in_executor(None, vpn.disconnect), timeout=10.0)
+        return result
+    except asyncio.TimeoutError:
+        return {"status": "timeout", "stub": True}
     except ImportError:
         return {"status": "vpn_module_unavailable", "stub": True}
 
@@ -73,19 +93,29 @@ async def proxy_test(request: Request):
 
 @router.get("/forensic")
 async def network_forensic():
+    import asyncio
     try:
         from forensic_monitor import ForensicMonitor
         monitor = ForensicMonitor()
-        return monitor.get_report()
-    except ImportError:
-        return {"stub": True}
+        loop = asyncio.get_event_loop()
+        result = await asyncio.wait_for(loop.run_in_executor(None, monitor.scan_system_state), timeout=15.0)
+        return result
+    except asyncio.TimeoutError:
+        return {"stub": True, "error": "forensic scan timed out"}
+    except (ImportError, AttributeError, Exception) as e:
+        return {"stub": True, "error": str(e)}
 
 
 @router.get("/shield")
 async def network_shield():
+    import asyncio
     try:
         from network_shield import NetworkShield
         shield = NetworkShield()
-        return shield.get_status()
-    except ImportError:
-        return {"stub": True}
+        loop = asyncio.get_event_loop()
+        result = await asyncio.wait_for(loop.run_in_executor(None, shield.get_status), timeout=15.0)
+        return result
+    except asyncio.TimeoutError:
+        return {"stub": True, "error": "network shield timed out"}
+    except (ImportError, AttributeError, Exception) as e:
+        return {"stub": True, "error": str(e)}

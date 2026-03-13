@@ -84,6 +84,12 @@ async def kyc_status(device_id: str):
     }
 
 
+@router.get("/{device_id}/deepfake_status")
+async def kyc_deepfake_status_alias(device_id: str):
+    """Alias called by the UI (deepfake_status → status)."""
+    return await kyc_status(device_id)
+
+
 @router.post("/{device_id}/kyc-flow")
 async def kyc_flow(device_id: str, request: Request):
     body = await request.json()

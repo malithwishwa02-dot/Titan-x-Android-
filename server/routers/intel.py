@@ -17,15 +17,10 @@ async def intel_copilot(request: Request):
     try:
         from ai_intelligence_engine import AIIntelligenceEngine
         engine = AIIntelligenceEngine()
-        result = engine.copilot_query(query)
+        result = engine.orchestrate_operation_intel(query)
         return {"result": result}
     except (ImportError, AttributeError):
-        try:
-            from ai_intelligence_engine import recon_target
-            result = recon_target(query)
-            return {"result": result}
-        except ImportError:
-            return {"result": f"AI engine not available. Query: {query}", "stub": True}
+        return {"result": f"AI engine not available. Query: {query}", "stub": True}
 
 
 @router.post("/recon")
@@ -33,12 +28,11 @@ async def intel_recon(request: Request):
     body = await request.json()
     domain = body.get("domain", "")
     try:
-        from target_intelligence import TargetProfiler
-        profiler = TargetProfiler()
-        result = profiler.profile(domain)
+        from target_intelligence import get_target_intel
+        result = get_target_intel(domain)
         return {"result": result}
-    except ImportError:
-        return {"domain": domain, "stub": True}
+    except (ImportError, Exception) as e:
+        return {"domain": domain, "stub": True, "error": str(e)}
 
 
 @router.post("/osint")
@@ -48,7 +42,7 @@ async def intel_osint(request: Request):
     try:
         from osint_orchestrator import OSINTOrchestrator
         orch = OSINTOrchestrator()
-        result = orch.investigate(
+        result = orch.run(
             name=body.get("name", ""),
             email=body.get("email", ""),
             username=body.get("username", ""),
@@ -56,8 +50,8 @@ async def intel_osint(request: Request):
             domain=body.get("domain", ""),
         )
         return {"result": result}
-    except ImportError:
-        return {"stub": True, "message": "osint_orchestrator not available"}
+    except (ImportError, Exception) as e:
+        return {"stub": True, "message": str(e)}
 
 
 @router.post("/3ds-strategy")
@@ -66,14 +60,14 @@ async def intel_3ds_strategy(request: Request):
     try:
         from three_ds_strategy import ThreeDSStrategy
         strategy = ThreeDSStrategy()
-        result = strategy.analyze(
-            merchant=body.get("merchant", ""),
-            card_bin=body.get("bin", ""),
+        result = strategy.get_recommendations(
+            bin_prefix=body.get("bin", ""),
+            merchant_domain=body.get("merchant", ""),
             amount=body.get("amount", 0),
         )
         return {"result": result}
-    except ImportError:
-        return {"stub": True}
+    except (ImportError, Exception) as e:
+        return {"stub": True, "error": str(e)}
 
 
 @router.post("/darkweb")

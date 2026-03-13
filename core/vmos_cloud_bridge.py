@@ -161,25 +161,34 @@ class VMOSCloudBridge:
         }
 
     async def _post(self, path: str, body: dict) -> dict:
-        """POST to VMOS Cloud API with HMAC-SHA256 auth."""
-        url = f"{self.base_url}{path}"
+        """POST to VMOS Cloud API with HMAC-SHA256 auth.
+        Uses http.client as primary transport — urllib/httpx get 500s from
+        TencentEdgeOne CDN due to header handling differences.
+        """
         body_str = json.dumps(body, separators=(",", ":"))
         headers = self._sign_request(body_str)
 
+        # http.client works reliably through TencentEdgeOne CDN
+        import http.client as _hc
         try:
-            import httpx
-            client = self._get_http()
-            if client:
-                resp = await client.post(url, content=body_str.encode("utf-8"), headers=headers)
-                data = resp.json()
-            else:
-                raise ImportError("httpx client not available")
-        except ImportError:
+            conn = _hc.HTTPSConnection(VMOS_API_HOST, timeout=30)
+            conn.request("POST", path, body=body_str.encode("utf-8"), headers=headers)
+            resp = conn.getresponse()
+            raw = resp.read().decode("utf-8")
+            conn.close()
+            data = json.loads(raw)
+        except Exception as e:
+            logger.warning(f"VMOS API http.client failed: {path} -> {e}")
+            # Fallback to httpx/urllib
+            url = f"{self.base_url}{path}"
             try:
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(url, data=body_str.encode("utf-8"), headers=headers) as resp:
-                        data = await resp.json()
+                import httpx
+                client = self._get_http()
+                if client:
+                    resp = await client.post(url, content=body_str.encode("utf-8"), headers=headers)
+                    data = resp.json()
+                else:
+                    raise ImportError("httpx client not available")
             except ImportError:
                 import urllib.request
                 req = urllib.request.Request(url, data=body_str.encode("utf-8"), headers=headers, method="POST")
@@ -264,11 +273,10 @@ class VMOSCloudBridge:
 
     async def get_instance_properties(self, pad_code: str) -> dict:
         """Get all system/modem/settings properties for an instance."""
-        data = await self._post("/vcpcloud/api/padApi/batchPadProperties", {
-            "padCodes": [pad_code]
+        data = await self._post("/vcpcloud/api/padApi/padProperties", {
+            "padCode": pad_code
         })
-        items = data.get("data", [])
-        return items[0] if items else {}
+        return data.get("data", {})
 
     async def restart_instance(self, pad_code: str) -> VMOSTaskResult:
         """Restart a VMOS Cloud instance."""
@@ -292,7 +300,7 @@ class VMOSCloudBridge:
     async def update_android_props(self, pad_code: str, props: Dict[str, str]) -> VMOSTaskResult:
         """
         Set Android ro.* properties for device fingerprint spoofing.
-        Maps Titan stealth vectors to VMOS Cloud property format.
+        Uses padCode (singular) + props (dict) format per VMOS Cloud API.
 
         Example props:
             {
@@ -304,11 +312,20 @@ class VMOSCloudBridge:
                 ...
             }
         """
-        results = await self._submit_and_wait(
+        data = await self._post(
             "/vcpcloud/api/padApi/updatePadAndroidProp",
-            {"padCodes": [pad_code], "properties": props}
+            {"padCode": pad_code, "props": props}
         )
-        return results[0] if results else VMOSTaskResult(status=4, error="No result")
+        task_id = 0
+        raw_data = data.get("data", {})
+        if isinstance(raw_data, dict):
+            task_id = raw_data.get("taskId", 0)
+        if task_id:
+            return await self._wait_for_task(task_id, pad_code)
+        # If no taskId, check if it was a direct success
+        if data.get("code") == 200:
+            return VMOSTaskResult(pad_code=pad_code, status=3, result="ok")
+        return VMOSTaskResult(status=4, error=data.get("msg", "No result"))
 
     async def update_device_identity(
         self,
@@ -465,17 +482,19 @@ class VMOSCloudBridge:
         return results[0] if results else VMOSTaskResult(status=4, error="No result")
 
     async def send_sms(self, pad_code: str, sender: str, message: str) -> VMOSTaskResult:
-        """Simulate receiving an SMS on the device."""
-        data = await self._post("/vcpcloud/api/padApi/simulateSendSms", {
-            "padCodes": [pad_code],
-            "senderNumber": sender,
-            "smsContent": message,
-        })
-        return VMOSTaskResult(
-            pad_code=pad_code,
-            status=3 if data.get("data") else 4,
-            result=str(data.get("data", "")),
+        """Simulate receiving an SMS on the device via content provider insert."""
+        ts = int(time.time() * 1000)
+        safe_sender = sender.replace("'", "")
+        safe_message = message.replace("'", "")
+        cmd = (
+            f"content insert --uri content://sms "
+            f"--bind address:s:'{safe_sender}' "
+            f"--bind body:s:'{safe_message}' "
+            f"--bind type:i:1 "
+            f"--bind date:l:{ts} "
+            f"--bind read:i:1"
         )
+        return await self.exec_shell(pad_code, cmd)
 
     # ─── SHELL / ADB COMMANDS ────────────────────────────────────────
 

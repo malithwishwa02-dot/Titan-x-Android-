@@ -52,10 +52,32 @@ setprop ro.boot.vbmeta.device_state locked
 setprop ro.boot.flash.locked 1
 log_i "Anti-emulator props set"
 
-# ─── Hide emulator artifacts ─────────────────────────────────────────
-mount -o bind /dev/null /proc/cmdline 2>/dev/null
-mount -o bind /dev/null /proc/1/cgroup 2>/dev/null
-log_i "Proc artifacts hidden"
+# ─── Hide emulator artifacts (sterile file method) ───────────────────
+# Bind-mounting /dev/null is detectable via /proc/mounts — generate clean files
+mkdir -p /data/titan
+
+# Sterile /proc/cmdline
+if [ -f /proc/cmdline ]; then
+    cat /proc/cmdline | sed 's/androidboot\.hardware=redroid//g' \
+        | sed 's/docker[^ ]*//g' | sed 's/containerd[^ ]*//g' \
+        | sed 's/lxc[^ ]*//g' | sed 's/  */ /g' \
+        > /data/titan/proc_cmdline_clean 2>/dev/null
+    # Ensure non-empty
+    [ -s /data/titan/proc_cmdline_clean ] || \
+        echo "androidboot.verifiedbootstate=green androidboot.slot_suffix=_a" > /data/titan/proc_cmdline_clean
+    mount -o bind /data/titan/proc_cmdline_clean /proc/cmdline 2>/dev/null
+fi
+
+# Sterile /proc/1/cgroup
+echo "0::/" > /data/titan/cgroup_clean
+mount -o bind /data/titan/cgroup_clean /proc/1/cgroup 2>/dev/null
+
+# Scrub /proc/mounts to hide bind-mount evidence
+cat /proc/mounts | grep -v '/proc/cmdline' | grep -v '/proc/1/cgroup' \
+    > /data/titan/mounts_clean 2>/dev/null
+mount -o bind /data/titan/mounts_clean /proc/mounts 2>/dev/null
+
+log_i "Proc artifacts hidden (sterile files)"
 
 # ─── Network: rename eth0 → wlan0 ────────────────────────────────────
 ip link set eth0 down 2>/dev/null
@@ -134,13 +156,21 @@ settings put secure accessibility_enabled 0 2>/dev/null
 settings put system screen_off_timeout 60000 2>/dev/null
 log_i "SELinux + accessibility hardened"
 
-# ─── WiFi scan results generation ─────────────────────────────────
-for SSID in NETGEAR72_5G Xfinity_Home ATT_FIBER Spectrum_5G TP_Link_5G linksys_5g; do
+# ─── WiFi scan results generation (locale-aware) ──────────────────
+# Read locale hint from persist prop, default to US SSIDs
+WIFI_LOCALE=$(getprop persist.titan.wifi.locale)
+case "$WIFI_LOCALE" in
+    GB) SSID_LIST="BT_Hub6_5G Sky_WiFi_Home Virgin_Media_5G TalkTalk_5G PlusNet_WiFi EE_Home_5G" ;;
+    DE) SSID_LIST="FRITZBox_7590 Telekom_5G Vodafone_Home_5G o2_WLAN Unitymedia_5G 1und1_WLAN" ;;
+    FR) SSID_LIST="Livebox_5G Freebox_5G SFR_Home Bouygues_5G Orange_WiFi RED_Home" ;;
+    *)  SSID_LIST="NETGEAR72_5G Xfinity_Home ATT_FIBER Spectrum_5G TP_Link_5G linksys_5g" ;;
+esac
+for SSID in $SSID_LIST; do
     RSSI=$(( RANDOM % 50 - 85 ))
     FREQ=$(shuf -e 2412 2437 5180 5745 -n 1 2>/dev/null || echo 2437)
     setprop "persist.titan.wifi.scan.${SSID}" "${RSSI},${FREQ}"
 done
-log_i "WiFi scan results generated"
+log_i "WiFi scan results generated (locale: ${WIFI_LOCALE:-US})"
 
 # ─── GMS background sync throttle (reduce CPU) ────────────────────
 settings put global background_data_restriction 0 2>/dev/null

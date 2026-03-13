@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Titan Console
+GenericName=Android Device Console
+Comment=Titan V11.3 Antidetect Android Console
+Exec=/opt/titan-console/start.sh %U
+Icon=/opt/titan-console/assets/icon.png
+Terminal=false
+Categories=Development;Utility;
+StartupWMClass=titan-console
+StartupNotify=true
+Keywords=titan;android;device;antidetect;console;

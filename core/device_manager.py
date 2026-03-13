@@ -335,7 +335,7 @@ class DeviceManager:
     async def screenshot(self, device_id: str) -> Optional[bytes]:
         """Capture device screenshot as JPEG bytes."""
         dev = self._devices.get(device_id)
-        if not dev or dev.state != "ready":
+        if not dev or dev.state not in ("ready", "patched", "running"):
             return None
 
         try:

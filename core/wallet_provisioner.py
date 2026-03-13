@@ -136,26 +136,35 @@ def detect_bin_info(card_number: str) -> Dict[str, Any]:
 def generate_dpan(card_number: str) -> str:
     """
     Generate a Device PAN (DPAN) from a real card number.
-    Preserves BIN prefix (first 6 digits) but generates different remaining digits.
-    This mimics real network tokenization behavior.
+    Uses Token Service Provider (TSP) BIN ranges instead of preserving
+    the physical card's BIN — real network tokenization maps to TSP-assigned
+    ranges that are distinct from the issuer BIN.
     """
     num = card_number.replace(" ", "").replace("-", "")
-    bin_prefix = num[:6]
+    network = detect_network(num)["network"]
+
+    # TSP-assigned Token BIN ranges (these BINs are reserved for DPANs)
+    TOKEN_BIN_RANGES = {
+        "visa": ["489537", "489538", "489539", "440066", "440067"],
+        "mastercard": ["530060", "530061", "530062", "530063", "530064", "530065"],
+        "amex": ["374800", "374801"],
+        "discover": ["601156", "601157"],
+    }
+
+    bins = TOKEN_BIN_RANGES.get(network, TOKEN_BIN_RANGES["visa"])
+    token_bin = random.choice(bins)
 
     # Generate random digits for the rest
     remaining_len = len(num) - 7  # -6 for BIN, -1 for check digit
     body = "".join([str(random.randint(0, 9)) for _ in range(remaining_len)])
 
-    partial = bin_prefix + body
+    partial = token_bin + body
 
-    # Luhn check digit (standard algorithm)
-    # For the partial number, double every odd-position digit from the right
+    # Luhn check digit
     digits = [int(d) for d in partial]
     total = 0
     for i, d in enumerate(reversed(digits)):
         if i % 2 == 0:
-            # These positions will be "odd from right" in the final number
-            # (shifted by 1 because check digit will be appended)
             doubled = d * 2
             total += doubled - 9 if doubled > 9 else doubled
         else:
@@ -291,6 +300,10 @@ class WalletProvisioner:
                               persona_name: str, result: WalletProvisionResult):
         """Write Google Pay tapandpay.db + wallet SharedPreferences."""
         try:
+            # Stop target processes to avoid DB locks
+            _adb_shell(self.target, "am force-stop com.google.android.apps.walletnfcrel")
+            time.sleep(1)
+
             # ── tapandpay.db ──
             with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
                 tmp_path = tmp.name
@@ -306,6 +319,12 @@ class WalletProvisioner:
                     card_network INTEGER NOT NULL,
                     card_description TEXT,
                     issuer_name TEXT,
+                    issuer_id TEXT DEFAULT '',
+                    funding_source_id TEXT DEFAULT '',
+                    card_art_url TEXT DEFAULT '',
+                    token_reference_id TEXT DEFAULT '',
+                    last_four_of_fpan TEXT DEFAULT '',
+                    terms_and_conditions_accepted INTEGER DEFAULT 1,
                     expiry_month INTEGER,
                     expiry_year INTEGER,
                     card_color INTEGER DEFAULT -1,
@@ -317,6 +336,32 @@ class WalletProvisioner:
                 )
             """)
 
+            # Token metadata table (replaces simple VIEW for real data)
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS token_metadata (
+                    token_id INTEGER PRIMARY KEY,
+                    token_state TEXT DEFAULT 'ACTIVE',
+                    token_pan TEXT,
+                    token_expiry TEXT,
+                    token_requestor_id TEXT DEFAULT 'GOOGLE_PAY',
+                    provisioning_status TEXT DEFAULT 'PROVISIONED',
+                    FOREIGN KEY (token_id) REFERENCES tokens(id)
+                )
+            """)
+
+            # Session keys stub for LUK/ATC references
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS session_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_id INTEGER NOT NULL,
+                    key_type TEXT DEFAULT 'LUK',
+                    key_expiry INTEGER,
+                    atc_counter INTEGER DEFAULT 0,
+                    created_timestamp INTEGER,
+                    FOREIGN KEY (token_id) REFERENCES tokens(id)
+                )
+            """)
+
             now_ms = int(time.time() * 1000)
             # Backdate creation by 7-30 days to look established
             created_ms = now_ms - random.randint(7 * 86400000, 30 * 86400000)
@@ -324,21 +369,39 @@ class WalletProvisioner:
             last_used_ms = now_ms - random.randint(0, 3 * 86400000)
 
             card_desc = f"{network_info['name']} •••• {last4}"
+            issuer_id = secrets.token_hex(8)
+            funding_source_id = str(uuid.uuid4())
+            token_ref_id = f"DNITHE{secrets.token_hex(6).upper()}"
+            card_art = f"https://payments.google.com/payments/apis-secure/get_card_art?instrument_id={funding_source_id}&network={network_info['network']}"
 
             c.execute("""
                 INSERT INTO tokens
                 (dpan, fpan_last4, card_network, card_description, issuer_name,
+                 issuer_id, funding_source_id, card_art_url, token_reference_id,
+                 last_four_of_fpan, terms_and_conditions_accepted,
                  expiry_month, expiry_year, card_color, is_default, status,
                  token_service_provider, created_timestamp, last_used_timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1, 1, 1, ?, ?)
             """, (
                 dpan, last4, network_info["network_id"], card_desc, issuer,
+                issuer_id, funding_source_id, card_art, token_ref_id, last4,
                 exp_month, exp_year, network_info.get("color", -1),
                 created_ms, last_used_ms,
             ))
 
-            # Compatibility view for apps checking token_metadata
-            c.execute("CREATE VIEW IF NOT EXISTS token_metadata AS SELECT * FROM tokens")
+            # Populate token_metadata
+            token_id = c.lastrowid
+            c.execute("""
+                INSERT INTO token_metadata
+                (token_id, token_state, token_pan, token_expiry, token_requestor_id)
+                VALUES (?, 'ACTIVE', ?, ?, 'GOOGLE_PAY')
+            """, (token_id, dpan, f"{exp_month:02d}/{exp_year}"))
+
+            # Stub session key entry
+            c.execute("""
+                INSERT INTO session_keys (token_id, key_type, key_expiry, atc_counter, created_timestamp)
+                VALUES (?, 'LUK', ?, 0, ?)
+            """, (token_id, created_ms + 86400000, created_ms))
 
             conn.commit()
             conn.close()
@@ -348,6 +411,9 @@ class WalletProvisioner:
             _adb_shell(self.target, f"mkdir -p {self.WALLET_DATA}/databases")
             if _adb_push(self.target, tmp_path, db_remote):
                 self._fix_ownership(db_remote, "com.google.android.apps.walletnfcrel")
+                # Backdate to match card creation time
+                backdate_fmt = time.strftime("%Y%m%d%H%M.%S", time.gmtime(created_ms / 1000))
+                _adb_shell(self.target, f"touch -t {backdate_fmt} {db_remote} 2>/dev/null")
                 logger.info(f"  Google Pay tapandpay.db: {card_desc}")
             else:
                 result.errors.append("Failed to push tapandpay.db")
@@ -409,13 +475,20 @@ class WalletProvisioner:
                               persona_email: str, result: WalletProvisionResult):
         """Write Play Store billing SharedPreferences with payment method."""
         try:
+            _adb_shell(self.target, "am force-stop com.android.vending")
+            time.sleep(1)
+
+            payment_profile_id = str(uuid.uuid4())
+            instrument_id = str(uuid.uuid4())
             billing_prefs = {
-                "billing_client_version": "6.1.0",
+                "billing_client_version": "7.1.0",
                 "has_payment_method": "true",
                 "default_payment_method_type": network_info["network"],
                 "default_payment_method_last4": last4,
                 "default_payment_method_description": f"{network_info['name']} ····{last4}",
                 "billing_account": persona_email or "",
+                "payment_profile_id": payment_profile_id,
+                "instrument_id": instrument_id,
             }
             self._push_shared_prefs_xml(
                 f"{self.VENDING_DATA}/shared_prefs/com.android.vending.billing.InAppBillingService.COIN.xml",
@@ -436,6 +509,9 @@ class WalletProvisioner:
                                     result: WalletProvisionResult):
         """Write card into Chrome's Web Data autofill database."""
         try:
+            _adb_shell(self.target, "am force-stop com.android.chrome")
+            time.sleep(1)
+
             with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
                 tmp_path = tmp.name
 
@@ -506,10 +582,12 @@ class WalletProvisioner:
             ]
             origin = random.choice(AUTOFILL_ORIGINS)
 
-            # Chrome encrypts card numbers; for local storage we store a hint
-            # In practice, Chrome uses OS keystore — we store the encrypted blob
-            # as a placeholder that matches the expected format
-            card_blob = card_number.encode("utf-8")
+            # Chrome encrypts card numbers using Android Keystore.
+            # We cannot replicate the exact encrypted blob without the device's
+            # keystore key, so we store a version-tagged placeholder.
+            # Setting use_count=0 signals Chrome to re-prompt for card entry
+            # on first use — the card still appears in autofill suggestions.
+            card_blob = b'\x76\x31\x00' + card_number.encode("utf-8")  # v1 prefix marker
 
             card_guid = str(uuid.uuid4())
             c.execute("""
@@ -517,10 +595,10 @@ class WalletProvisioner:
                 (guid, name_on_card, expiration_month, expiration_year,
                  card_number_encrypted, date_modified, origin, use_count, use_date,
                  nickname)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
             """, (
                 card_guid, cardholder, exp_month, exp_year,
-                card_blob, date_added, origin, use_count, last_used,
+                card_blob, date_added, origin, last_used,
                 f"{network_info['name']} ····{last4}",
             ))
 
@@ -569,6 +647,9 @@ class WalletProvisioner:
             _adb_shell(self.target, f"mkdir -p {self.CHROME_DATA}/app_chrome/Default")
             if _adb_push(self.target, tmp_path, web_data_path):
                 self._fix_ownership(web_data_path, "com.android.chrome")
+                # Backdate Chrome Web Data to look established
+                chrome_backdate = time.strftime("%Y%m%d%H%M.%S", time.gmtime(date_added))
+                _adb_shell(self.target, f"touch -t {chrome_backdate} {web_data_path} 2>/dev/null")
                 result.chrome_autofill_ok = True
                 logger.info(f"  Chrome autofill: {network_info['name']} ****{last4}")
             else:
@@ -693,7 +774,7 @@ class WalletProvisioner:
         os.unlink(tmp_path)
 
     def _fix_ownership(self, remote_path: str, package: str):
-        """Fix file ownership to match app UID."""
+        """Fix file ownership and SELinux context to match app UID."""
         uid = _adb_shell(self.target,
             f"stat -c %U /data/data/{package} 2>/dev/null || "
             f"ls -ld /data/data/{package} | awk '{{print $3}}'")
@@ -701,3 +782,6 @@ class WalletProvisioner:
         if uid:
             _adb_shell(self.target, f"chown {uid}:{uid} {remote_path}")
         _adb_shell(self.target, f"chmod 660 {remote_path}")
+        # Restore SELinux context — without this, apps get permission denied
+        parent_dir = remote_path.rsplit("/", 1)[0] if "/" in remote_path else remote_path
+        _adb_shell(self.target, f"restorecon -R {parent_dir} 2>/dev/null")

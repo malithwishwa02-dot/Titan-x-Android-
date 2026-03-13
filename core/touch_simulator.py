@@ -58,6 +58,17 @@ class TouchSimulator:
         self.sw = screen_width
         self.sh = screen_height
         self._last_action_time = 0.0
+        self._sensor_sim = None
+
+    def _get_sensor_sim(self):
+        """Lazy-init sensor simulator for gesture coupling."""
+        if self._sensor_sim is None:
+            try:
+                from sensor_simulator import SensorSimulator
+                self._sensor_sim = SensorSimulator(adb_target=self.target)
+            except ImportError:
+                pass
+        return self._sensor_sim
 
     # ─── TAP ──────────────────────────────────────────────────────────
 
@@ -76,6 +87,10 @@ class TouchSimulator:
         ok = _shell(self.target, f"input tap {jx} {jy}")
         if ok:
             logger.debug(f"Tap ({jx},{jy}) [target: ({x},{y})]")
+            sim = self._get_sensor_sim()
+            if sim:
+                sim.couple_with_gesture("tap")
+                sim.inject_sensor_burst("accelerometer", duration_ms=120)
         self._last_action_time = time.time()
         return ok
 
@@ -124,6 +139,10 @@ class TouchSimulator:
 
         if ok:
             logger.debug(f"Swipe ({x1},{y1})→({x2},{y2}) {duration_ms}ms")
+            sim = self._get_sensor_sim()
+            if sim:
+                sim.couple_with_gesture("swipe")
+                sim.inject_sensor_burst("accelerometer", duration_ms=min(duration_ms, 350))
         self._last_action_time = time.time()
         return ok
 

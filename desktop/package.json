@@ -1,0 +1,33 @@
+{
+  "name": "titan-console",
+  "version": "11.3.1",
+  "description": "Titan V11.3 Android Console — Desktop App",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --linux"
+  },
+  "author": "Titan",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.titan.console",
+    "productName": "Titan Console",
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "icon": "assets/icon.png"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "assets/**"
+    ]
+  }
+}
