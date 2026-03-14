@@ -383,8 +383,8 @@ PERSONAS = [
     {"name": "Robert Wilson", "email": "r.wilson.pro@gmail.com", "phone": "+12025556543", "password": "W!ls0nR0b"},
 ]
 
-DEVICE_IDS = ["dev-us1", "vmos-oneplus-ace3", "vmos-samsung-s24"]
-DEVICE_TYPES = {"dev-us1": "cuttlefish", "vmos-oneplus-ace3": "cuttlefish", "vmos-samsung-s24": "cuttlefish"}
+DEVICE_IDS = ["dev-us1", "dev-a1b2c3", "dev-d4e5f6"]
+DEVICE_TYPES = {"dev-us1": "cuttlefish", "dev-a1b2c3": "cuttlefish", "dev-d4e5f6": "cuttlefish"}
 
 APP_PACKAGES = {
     "Instagram": "com.instagram.android",
@@ -497,8 +497,8 @@ def generate_trajectory(template_name: str, template_def: dict, persona: dict,
             "current_app": action.get("package", "com.android.launcher3"),
             "element_count": random.randint(3, 12),
             "has_screenshot": False,
-            "vision_used": device_type == "vmos_cloud",
-            "vision_description": screen_ctx[:300] if device_type == "vmos_cloud" else "",
+            "vision_used": False,
+            "vision_description": "",
             "llm_prompt": llm_prompt,
             "llm_response": llm_response,
             "llm_model": "hermes3:8b",

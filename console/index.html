@@ -80,7 +80,7 @@
     <template x-for="dev in devices" :key="dev.id">
       <div class="device-card grp" @click="section='devices'">
         <div class="flex items-center justify-between mb-3">
-          <div class="flex items-center gap-1.5"><span class="text-xs font-mono text-gray-500" x-text="dev.id"></span><span x-show="dev.device_type==='vmos_cloud'" class="text-[10px] bg-purple-600/80 text-purple-100 px-1.5 py-0.5 rounded font-medium">VMOS</span><span x-show="dev.device_type!=='vmos_cloud'" class="text-[10px] bg-blue-600/80 text-blue-100 px-1.5 py-0.5 rounded font-medium">Redroid</span></div>
+          <div class="flex items-center gap-1.5"><span class="text-xs font-mono text-gray-500" x-text="dev.id"></span><span class="text-[10px] bg-cyan-600/80 text-cyan-100 px-1.5 py-0.5 rounded font-medium">Cuttlefish</span></div>
           <div class="score-ring" :class="dev.stealth_score>=90?'bg-green-900/50 text-green-400 border border-green-700':dev.stealth_score>=70?'bg-yellow-900/50 text-yellow-400 border border-yellow-700':'bg-red-900/50 text-red-400 border border-red-700'" x-text="dev.stealth_score+'%'"></div>
         </div>
         <div class="text-sm font-semibold text-white mb-1" x-text="presetName(dev.config?.model)"></div>
@@ -106,22 +106,13 @@
     </div>
     <button @click="createDevice()" :disabled="creating" class="btn-primary text-white px-6 py-2 rounded-lg text-sm font-medium disabled:opacity-50"><span x-show="!creating">Create &amp; Auto-Patch</span><span x-show="creating">Creating...</span></button>
   </div>
-  <div class="grp mb-6">
-    <h3 class="grp-title text-purple-400">Register VMOS Cloud Device</h3>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-      <div class="md:col-span-2"><label class="lbl">PAD Code</label><input type="text" x-model="vmosRegister.pad_code" placeholder="ACP2509244LGV1MV" class="inp font-mono"></div>
-      <div><label class="lbl">Device Model</label><select x-model="vmosRegister.model" class="inp"><template x-for="p in presets" :key="p.key"><option :value="p.key" x-text="p.name"></option></template></select></div>
-      <div><label class="lbl">Country</label><select x-model="vmosRegister.country" class="inp"><option value="US">United States</option><option value="GB">United Kingdom</option><option value="DE">Germany</option></select></div>
-    </div>
-    <button @click="registerVmos()" :disabled="vmosRegistering" class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg text-sm font-medium disabled:opacity-50"><span x-show="!vmosRegistering">Register VMOS Device</span><span x-show="vmosRegistering">Registering...</span></button>
-  </div>
   <div class="space-y-3">
     <template x-for="dev in devices" :key="dev.id">
       <div class="grp flex items-center gap-4">
         <div class="score-ring flex-shrink-0" :class="dev.stealth_score>=90?'bg-green-900/50 text-green-400 border border-green-700':'bg-yellow-900/50 text-yellow-400 border border-yellow-700'" x-text="dev.stealth_score+'%'"></div>
         <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-2"><span class="text-sm font-semibold text-white" x-text="presetName(dev.config?.model)"></span><span class="text-xs font-mono text-gray-500" x-text="dev.id"></span><span x-show="dev.device_type==='vmos_cloud'" class="text-[10px] bg-purple-600/80 text-purple-100 px-1.5 py-0.5 rounded font-medium">VMOS</span><span x-show="dev.device_type!=='vmos_cloud'" class="text-[10px] bg-blue-600/80 text-blue-100 px-1.5 py-0.5 rounded font-medium">Redroid</span></div>
-          <div class="text-xs text-gray-500 mt-0.5" x-text="(dev.config?.carrier||'').replace('_',' ')+' &#183; '+(dev.config?.country||'')+' &#183; '+(dev.device_type==='vmos_cloud'?'VMOS '+dev.vmos_pad_code:'ADB '+(dev.adb_target||''))"></div>
+          <div class="flex items-center gap-2"><span class="text-sm font-semibold text-white" x-text="presetName(dev.config?.model)"></span><span class="text-xs font-mono text-gray-500" x-text="dev.id"></span><span class="text-[10px] bg-cyan-600/80 text-cyan-100 px-1.5 py-0.5 rounded font-medium">Cuttlefish</span></div>
+          <div class="text-xs text-gray-500 mt-0.5" x-text="(dev.config?.carrier||'').replace('_',' ')+' &#183; '+(dev.config?.country||'')+' &#183; ADB '+(dev.adb_target||'')"></div>
         </div>
         <div class="flex gap-2">
           <button @click="viewDevice(dev)" class="px-3 py-1.5 bg-cyan-900/50 text-cyan-400 rounded-lg text-xs hover:bg-cyan-900">Screen</button>
@@ -322,7 +313,7 @@
       <div class="grp glow">
         <h3 class="grp-title text-purple-400">Inject Profile Into Device</h3>
         <div class="space-y-3">
-          <div><label class="lbl">Target Device</label><select x-model="inject.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ['+(d.device_type||'redroid')+'] ('+presetName(d.config?.model)+') &#8212; '+d.state"></option></template></select></div>
+          <div><label class="lbl">Target Device</label><select x-model="inject.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' [cuttlefish] ('+presetName(d.config?.model)+') &#8212; '+d.state"></option></template></select></div>
           <div><label class="lbl">Profile</label><select x-model="inject.profile_id" class="inp"><option value="">Select profile...</option><template x-for="p in profiles" :key="p.id"><option :value="p.id" x-text="(p.persona_name||p.id)+' ('+(p.country||'')+', '+(p.age_days||0)+'d)'"></option></template></select></div>
           <div class="grid grid-cols-3 gap-3"><div><label class="lbl">CC Number</label><input type="text" x-model="inject.cc" placeholder="Card number" class="inp"></div><div><label class="lbl">Expiry</label><input type="text" x-model="inject.cc_exp" placeholder="MM/YYYY" class="inp"></div><div><label class="lbl">CVV</label><input type="text" x-model="inject.cc_cvv" placeholder="CVV" class="inp"></div></div>
           <div><label class="lbl">Cardholder Name</label><input type="text" x-model="inject.cc_name" placeholder="Name on card" class="inp"></div>
@@ -354,7 +345,7 @@
         <h3 class="grp-title text-yellow-400">Device Aging Pipeline (18 phases)</h3>
         <p class="text-[11px] text-gray-500 mb-3">Invokes AnomalyPatcher: 65+ vectors — timestamps, WiFi, usage stats, BT, keyboard, downloads, caches, camera, telephony, identity, build, RASP, GPU, battery, location, media.</p>
         <div class="space-y-3">
-          <div><label class="lbl">Target Device</label><select x-model="aging.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ['+(d.device_type||'redroid')+'] ('+presetName(d.config?.model)+')'"></option></template></select></div>
+          <div><label class="lbl">Target Device</label><select x-model="aging.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' [cuttlefish] ('+presetName(d.config?.model)+')'"></option></template></select></div>
           <div class="grid grid-cols-2 gap-3">
             <div><label class="lbl">Age (days)</label><input type="number" x-model.number="aging.age_days" min="7" max="900" class="inp"></div>
             <div><label class="lbl">Device Preset</label><select x-model="aging.preset" class="inp"><option value="pixel_9_pro">Pixel 9 Pro</option><option value="samsung_s25_ultra">Samsung S25 Ultra</option><option value="samsung_s24">Samsung S24</option><option value="pixel_8a">Pixel 8a</option><option value="oneplus_13">OnePlus 13</option></select></div>
@@ -695,8 +686,6 @@ function titanConsole() {
     kycWs: null,
 
     newDevice: { model: 'samsung_s25_ultra', country: 'US', carrier: 'tmobile_us', location: 'nyc' },
-    vmosRegister: { pad_code: '', model: 'samsung_s25_ultra', country: 'US' },
-    vmosRegistering: false,
 
     genesisTab: 'Forge', cerberusTab: 'Validate', kycTab: 'Android Device',
     intelTab: 'AI Copilot', networkTab: 'Mullvad VPN', targetsTab: 'Analyze',
@@ -777,7 +766,6 @@ function titanConsole() {
 
     // Device Management
     async createDevice() { this.creating=true; try { await this.api('/devices',{method:'POST',body:JSON.stringify(this.newDevice)}); await this.loadDevices(); } catch(e) { alert('Create failed: '+e.message); } this.creating=false; },
-    async registerVmos() { if(!this.vmosRegister.pad_code){alert('Enter PAD code');return;} this.vmosRegistering=true; try { await this.api('/vmos/register',{method:'POST',body:JSON.stringify({pad_code:this.vmosRegister.pad_code,model:this.vmosRegister.model,country:this.vmosRegister.country})}); this.vmosRegister.pad_code=''; await this.loadDevices(); } catch(e) { alert('Register failed: '+e.message); } this.vmosRegistering=false; },
     async deleteDevice(id) { if(!confirm('Destroy '+id+'?'))return; await this.api('/devices/'+id,{method:'DELETE'}); await this.loadDevices(); },
     async patchDevice(id) { try { const r=await this.api('/stealth/'+id+'/patch',{method:'POST',body:'{}'}); alert('Patched: score='+r.score+'%'); await this.loadDevices(); } catch(e) { alert(e.message); } },
     async auditDevice(id) { try { const r=await this.api('/stealth/'+id+'/audit'); alert('Audit: '+r.passed+'/'+r.total+' ('+r.score+'%)'); } catch(e) { alert(e.message); } },

@@ -57,7 +57,7 @@ class DeviceInstance:
     patch_result: Dict         # last AnomalyPatcher.full_patch() report
     installed_apps: List[str]  # list of installed APK package names
     stealth_score: int         # 0–100 from last patch report
-    device_type: str           # "cuttlefish" | "redroid" (legacy) | "vmos" (deprecated)
+    device_type: str           # "cuttlefish" (KVM-based Android VM)
     instance_num: int          # Cuttlefish --base_instance_num (1-based)
     cvd_home: str              # e.g. "/opt/titan/cuttlefish/dev-a3f12b"
     vnc_port: int              # e.g. 6444

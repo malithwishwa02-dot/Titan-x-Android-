@@ -67,6 +67,30 @@ def _ensure_adb_root(target: str):
     return False
 
 
+def _fix_file_ownership(target: str, remote_path: str, package: str):
+    """Standardized UID/chown/chmod/restorecon for injected files.
+
+    When pushing files via root ADB, they inherit root:root ownership.
+    The target app (running as unprivileged UID) gets permission denied,
+    causing it to crash, clear data, or recreate an empty database —
+    completely nullifying the injection.
+
+    This function:
+      1. Dynamically resolves the app's UID via stat
+      2. Sets correct chown <uid>:<uid>
+      3. Sets chmod 660 (owner+group rw)
+      4. Runs restorecon to fix SELinux context labels
+    """
+    uid = _adb_shell(target,
+        f"stat -c %U /data/data/{package} 2>/dev/null || "
+        f"ls -ld /data/data/{package} | awk '{{print $3}}'").strip()
+    if uid:
+        _adb_shell(target, f"chown {uid}:{uid} {remote_path}")
+    _adb_shell(target, f"chmod 660 {remote_path}")
+    parent_dir = remote_path.rsplit("/", 1)[0] if "/" in remote_path else remote_path
+    _adb_shell(target, f"restorecon -R {parent_dir} 2>/dev/null")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # INJECTION RESULT
 # ═══════════════════════════════════════════════════════════════════════
@@ -364,7 +388,7 @@ class ProfileInjector:
             _adb_shell(self.target, f"mkdir -p {remote_dir}")
 
             if _adb_push(self.target, tmp_path, f"{remote_dir}/titan_usage.json"):
-                _adb_shell(self.target, f"restorecon -R {remote_dir} 2>/dev/null")
+                _fix_file_ownership(self.target, f"{remote_dir}/titan_usage.json", "com.android.chrome")
                 self.result.app_usage_ok = True
                 logger.info(f"  App usage: {len(app_usage)} app records")
 
@@ -541,14 +565,7 @@ class ProfileInjector:
 
             # Push back to device
             if _adb_push(self.target, tmp_path, f"{self.CHROME_DATA}/Cookies"):
-                # Fix ownership: get Chrome's UID and set it properly
-                chrome_uid = _adb_shell(self.target,
-                    "stat -c %U /data/data/com.android.chrome 2>/dev/null || "
-                    "ls -ld /data/data/com.android.chrome | awk '{print $3}'").strip()
-                if chrome_uid:
-                    _adb_shell(self.target, f"chown {chrome_uid}:{chrome_uid} {self.CHROME_DATA}/Cookies")
-                _adb_shell(self.target, f"chmod 660 {self.CHROME_DATA}/Cookies")
-                _adb_shell(self.target, f"restorecon -R {self.CHROME_DATA} 2>/dev/null")
+                _fix_file_ownership(self.target, f"{self.CHROME_DATA}/Cookies", "com.android.chrome")
                 self.result.cookies_injected = count
                 logger.info(f"  Cookies: {count} injected")
             else:
@@ -630,7 +647,7 @@ class ProfileInjector:
             conn.close()
 
             if _adb_push(self.target, tmp_path, f"{self.CHROME_DATA}/History"):
-                _adb_shell(self.target, f"restorecon -R {self.CHROME_DATA} 2>/dev/null")
+                _fix_file_ownership(self.target, f"{self.CHROME_DATA}/History", "com.android.chrome")
                 self.result.history_injected = count
                 logger.info(f"  History: {count} URLs injected")
 

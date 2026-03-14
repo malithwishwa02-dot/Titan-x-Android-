@@ -182,7 +182,7 @@ DEVICE_PRESETS: Dict[str, DevicePreset] = {
 
     # ── OnePlus ───────────────────────────────────────────────────────
     "oneplus_ace3": DevicePreset(
-        name="OnePlus Ace 3 (VMOS Template)",
+        name="OnePlus Ace 3",
         brand="OnePlus", manufacturer="OnePlus",
         model="PKX110", device="OP60F5L1", product="PKX110",
         fingerprint="OnePlus/PKX110/OP60F5L1:15/AP3A.240617.008/V.1a42e08_42cb7b_428e83:user/release-keys",
@@ -282,7 +282,7 @@ DEVICE_PRESETS: Dict[str, DevicePreset] = {
         gpu_renderer="Mali-G57 MC3", gpu_vendor="ARM", gpu_version="OpenGL ES 3.2 v1.r32p1",
     ),
     "vivo_x200": DevicePreset(
-        name="Vivo V2408A (VMOS Template Legacy)",
+        name="Vivo V2408A",
         brand="vivo", manufacturer="vivo",
         model="V2408A", device="PD2408", product="PD2408",
         fingerprint="vivo/PD2408/PD2408:15/AP3A.240905.015.A2/compiler2:user/release-keys",

@@ -57,6 +57,9 @@ class CreateDeviceRequest:
     dpi: int = 420
     memory_mb: int = 4096
     cpus: int = 4
+    numa_node: int = -1          # -1 = auto-detect, 0+ = pin to specific NUMA node
+    cpu_governor: str = "schedutil"  # schedutil|performance|powersave
+    gpu_mode: str = "guest_swiftshader"  # guest_swiftshader|drm_virgl|gfxstream
 
 
 @dataclass
@@ -72,7 +75,7 @@ class DeviceInstance:
     patch_result: Dict[str, Any] = field(default_factory=dict)
     installed_apps: List[str] = field(default_factory=list)
     stealth_score: int = 0
-    device_type: str = "cuttlefish"    # "cuttlefish" (primary) | "redroid" (legacy)
+    device_type: str = "cuttlefish"    # "cuttlefish" (KVM-based Android VM)
     instance_num: int = 1              # Cuttlefish --base_instance_num
     cvd_home: str = ""                 # Cuttlefish HOME directory for this instance
     vnc_port: int = 6444               # VNC display port
@@ -115,11 +118,104 @@ def _adb_shell(target: str, cmd: str, timeout: int = 15) -> str:
 class DeviceManager:
     """Manages multiple Cuttlefish Android virtual machines via launch_cvd/stop_cvd."""
 
+    # Required kernel modules for Cuttlefish KVM operation
+    REQUIRED_MODULES = ["kvm", "vhost_vsock", "vhost_net"]
+    OPTIONAL_MODULES = ["binder_linux", "ashmem_linux", "v4l2loopback"]
+
     def __init__(self):
         DEVICES_DIR.mkdir(parents=True, exist_ok=True)
         CVD_HOME_BASE.mkdir(parents=True, exist_ok=True)
         self._devices: Dict[str, DeviceInstance] = {}
+        self._numa_topology: Optional[Dict] = None
         self._load_state()
+
+    # ─── NUMA / CPU AFFINITY ──────────────────────────────────────────
+
+    def _detect_numa_topology(self) -> Dict[str, Any]:
+        """Detect NUMA topology for CPU pinning optimization.
+
+        On multi-socket servers (e.g., AMD EPYC), pinning Cuttlefish VMs
+        to a specific NUMA node prevents cross-socket memory access latency
+        and reduces performance jitter that can be detected by timing-based
+        RASP analysis.
+        """
+        if self._numa_topology:
+            return self._numa_topology
+
+        topology = {"nodes": [], "total_cpus": 0, "numa_available": False}
+
+        r = _run("lscpu --parse=CPU,NODE 2>/dev/null | grep -v '^#'", timeout=5)
+        if r["ok"] and r["stdout"]:
+            nodes: Dict[int, List[int]] = {}
+            for line in r["stdout"].strip().split("\n"):
+                parts = line.strip().split(",")
+                if len(parts) >= 2:
+                    try:
+                        cpu_id, node_id = int(parts[0]), int(parts[1])
+                        nodes.setdefault(node_id, []).append(cpu_id)
+                    except ValueError:
+                        continue
+
+            for node_id in sorted(nodes.keys()):
+                topology["nodes"].append({
+                    "id": node_id,
+                    "cpus": sorted(nodes[node_id]),
+                    "cpu_count": len(nodes[node_id]),
+                })
+            topology["total_cpus"] = sum(len(n) for n in nodes.values())
+            topology["numa_available"] = len(nodes) > 1
+
+        self._numa_topology = topology
+        return topology
+
+    def _select_numa_cpus(self, req: CreateDeviceRequest) -> Optional[str]:
+        """Select CPUs for NUMA-aware pinning. Returns taskset CPU list or None."""
+        topo = self._detect_numa_topology()
+        if not topo["numa_available"]:
+            return None
+
+        node_id = req.numa_node
+        if node_id == -1:
+            # Auto-select: pick the NUMA node with the most free CPUs
+            # (approximation: pick node with most CPUs)
+            best = max(topo["nodes"], key=lambda n: n["cpu_count"])
+            node_id = best["id"]
+
+        # Find the requested NUMA node
+        target_node = None
+        for node in topo["nodes"]:
+            if node["id"] == node_id:
+                target_node = node
+                break
+
+        if not target_node or len(target_node["cpus"]) < req.cpus:
+            logger.warning(f"NUMA node {node_id} has insufficient CPUs "
+                           f"({len(target_node['cpus'] if target_node else [])} < {req.cpus})")
+            return None
+
+        # Select the first N CPUs from this node
+        selected = target_node["cpus"][:req.cpus]
+        cpu_list = ",".join(str(c) for c in selected)
+        logger.info(f"NUMA pinning: node={node_id}, cpus={cpu_list}")
+        return cpu_list
+
+    def _ensure_kernel_modules(self):
+        """Verify and load required kernel modules for Cuttlefish."""
+        for mod in self.REQUIRED_MODULES:
+            r = _run(f"lsmod | grep -q '^{mod}' || modprobe {mod} 2>/dev/null", timeout=10)
+            if not r["ok"]:
+                logger.warning(f"Kernel module '{mod}' not available — Cuttlefish may fail")
+
+        for mod in self.OPTIONAL_MODULES:
+            _run(f"lsmod | grep -q '^{mod}' || modprobe {mod} 2>/dev/null", timeout=5)
+
+    def _set_cpu_governor(self, governor: str = "schedutil"):
+        """Set CPU frequency governor for consistent VM performance."""
+        valid = {"schedutil", "performance", "powersave", "ondemand", "conservative"}
+        if governor not in valid:
+            governor = "schedutil"
+        _run(f"for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; "
+             f"do echo {governor} > $f 2>/dev/null; done", timeout=5)
 
     # ─── STATE PERSISTENCE ────────────────────────────────────────────
 
@@ -224,6 +320,11 @@ class DeviceManager:
         if len(self._devices) >= MAX_DEVICES:
             raise RuntimeError(f"Max {MAX_DEVICES} devices reached")
 
+        # Pre-flight: ensure kernel modules and CPU governor
+        self._ensure_kernel_modules()
+        if req.cpu_governor != "schedutil":
+            self._set_cpu_governor(req.cpu_governor)
+
         dev_id = f"dev-{secrets.token_hex(3)}"
         instance_num = self._next_instance_num()
         adb_port = self._instance_adb_port(instance_num)
@@ -276,6 +377,7 @@ class DeviceManager:
             f"--config_file={config_path} "
             f"--base_instance_num={instance_num} "
             f"--daemon "
+            f"--gpu_mode={req.gpu_mode} "
             f"--report_anonymous_usage_stats=n "
         )
 
@@ -284,6 +386,12 @@ class DeviceManager:
             system_img = CVD_IMAGES_DIR / "system.img"
             if system_img.exists():
                 cvd_cmd += f"--system_image_dir={CVD_IMAGES_DIR} "
+
+        # NUMA-aware CPU pinning: wrap launch_cvd with taskset if on multi-socket
+        numa_cpus = self._select_numa_cpus(req)
+        if numa_cpus:
+            cvd_cmd = f"taskset -c {numa_cpus} {cvd_cmd}"
+            logger.info(f"NUMA pinning active: CPUs {numa_cpus}")
 
         logger.info(f"Creating Cuttlefish device {dev_id} (instance {instance_num})")
         result = _run(cvd_cmd, timeout=180, env={"HOME": str(cvd_home)})

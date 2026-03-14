@@ -320,6 +320,99 @@ class SensorSimulator:
             )
             logger.debug(f"Sensor burst: {sensor_type} {num_samples} samples, last={latest}")
 
+    # ─── GPS-IMU SENSOR FUSION SYNCHRONIZATION ───────────────────────
+
+    def synchronize_gps_imu(self, lat: float, lon: float,
+                             prev_lat: float = 0.0, prev_lon: float = 0.0,
+                             dt_seconds: float = 1.0):
+        """Synchronize IMU sensor data with GPS position changes.
+
+        Modern RASP and anti-spoofing systems use Extended Kalman Filters (EKF)
+        to cross-validate GNSS data against IMU readings. If the GPS coordinates
+        change while the accelerometer/gyroscope report zero movement, the
+        sensor fusion algorithm instantly detects the anomaly.
+
+        This method calculates the required velocity and directional vectors
+        from GPS displacement and translates them into corresponding
+        acceleration and angular velocity data, satisfying EKF consistency.
+
+        Args:
+            lat, lon: Current GPS coordinates
+            prev_lat, prev_lon: Previous GPS coordinates (0 = stationary)
+            dt_seconds: Time delta between position updates
+        """
+        if prev_lat == 0.0 and prev_lon == 0.0:
+            # Stationary — just inject idle noise (hand micro-tremor)
+            self._inject_stationary_imu()
+            return
+
+        # Calculate displacement in meters (Haversine approximation for short distances)
+        dlat = (lat - prev_lat) * 111320.0  # ~111.32 km per degree latitude
+        dlon = (lon - prev_lon) * 111320.0 * math.cos(math.radians(lat))
+        distance_m = math.sqrt(dlat**2 + dlon**2)
+
+        if distance_m < 0.5:
+            # Sub-meter movement — treat as stationary with micro-drift
+            self._inject_stationary_imu()
+            return
+
+        # Calculate velocity and bearing
+        velocity_ms = distance_m / max(dt_seconds, 0.1)
+        bearing_rad = math.atan2(dlon, dlat)
+
+        # Decompose acceleration into device-frame axes
+        # Assume phone held upright: X=lateral, Y=forward, Z=gravity
+        accel_forward = velocity_ms / max(dt_seconds, 0.1)  # dv/dt
+        # Clamp to realistic range (walking ~1.5 m/s², driving ~3 m/s²)
+        accel_forward = max(-5.0, min(5.0, accel_forward))
+
+        # Add realistic noise on top of the kinematic signal
+        accel_x = accel_forward * math.sin(bearing_rad) + random.gauss(0, 0.05)
+        accel_y = accel_forward * math.cos(bearing_rad) + random.gauss(0, 0.05)
+        accel_z = EARTH_G + random.gauss(0, 0.02)  # Gravity + noise
+
+        # Gyroscope: angular velocity from bearing change
+        # If bearing changes, there's a corresponding yaw rotation
+        gyro_yaw = random.gauss(0, 0.01)  # Base noise
+        if velocity_ms > 0.5:
+            # Walking/driving induces periodic body sway
+            sway_freq = 1.8 if velocity_ms < 2.0 else 0.5  # Walking vs driving
+            t = time.time()
+            gyro_x = 0.02 * math.sin(2 * math.pi * sway_freq * t) + random.gauss(0, 0.005)
+            gyro_y = 0.01 * math.sin(2 * math.pi * sway_freq * t + 1.2) + random.gauss(0, 0.005)
+        else:
+            gyro_x = random.gauss(0, 0.005)
+            gyro_y = random.gauss(0, 0.005)
+
+        # Inject synchronized IMU data
+        accel_str = f"{accel_x:.6f},{accel_y:.6f},{accel_z:.6f}"
+        gyro_str = f"{gyro_x:.6f},{gyro_y:.6f},{gyro_yaw:.6f}"
+
+        self._sh(
+            f"setprop persist.titan.sensor.accelerometer.data '{accel_str}'; "
+            f"setprop persist.titan.sensor.accelerometer.ts '{int(time.time() * 1000)}'; "
+            f"setprop persist.titan.sensor.gyroscope.data '{gyro_str}'; "
+            f"setprop persist.titan.sensor.gyroscope.ts '{int(time.time() * 1000)}'"
+        )
+
+        logger.debug(f"GPS-IMU sync: dist={distance_m:.1f}m, v={velocity_ms:.2f}m/s, "
+                      f"accel=[{accel_x:.3f},{accel_y:.3f},{accel_z:.3f}]")
+
+    def _inject_stationary_imu(self):
+        """Inject realistic stationary IMU data (hand micro-tremor + OADEV noise)."""
+        accel = self.generate_accelerometer_frame()
+        gyro = self.generate_gyroscope_frame()
+        accel_str = f"{accel[0]:.6f},{accel[1]:.6f},{accel[2]:.6f}"
+        gyro_str = f"{gyro[0]:.6f},{gyro[1]:.6f},{gyro[2]:.6f}"
+        self._sh(
+            f"setprop persist.titan.sensor.accelerometer.data '{accel_str}'; "
+            f"setprop persist.titan.sensor.accelerometer.ts '{int(time.time() * 1000)}'; "
+            f"setprop persist.titan.sensor.gyroscope.data '{gyro_str}'; "
+            f"setprop persist.titan.sensor.gyroscope.ts '{int(time.time() * 1000)}'"
+        )
+
+    # ─── BACKGROUND NOISE ─────────────────────────────────────────────
+
     def start_background_noise(self, duration_s: float = 0.0):
         """Set initial background sensor readings on the device.
 
@@ -337,72 +430,4 @@ class SensorSimulator:
                 f"setprop persist.titan.sensor.{sensor}.ts '{int(time.time() * 1000)}'"
             )
         logger.info("Background sensor noise initialized")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# VMOS CLOUD ADAPTER [DEPRECATED — retained for reference, no longer called]
-# Cuttlefish VMs use the base SensorSimulator with standard ADB.
-# ═══════════════════════════════════════════════════════════════════════
-
-class VMOSSensorAdapter(SensorSimulator):
-    """[DEPRECATED] SensorSimulator variant for VMOS Cloud devices.
-
-    This class is no longer used. Cuttlefish VMs use the base
-    SensorSimulator class with standard ADB shell commands.
-
-    Usage (legacy):
-        adapter = VMOSSensorAdapter(pad_code="ACP2509244LGV1MV",
-                                    api_key=AK, api_secret=SK, brand="samsung")
-        adapter.couple_with_gesture("tap", magnitude=0.3)
-        adapter.inject_sensor_burst("accelerometer", duration_ms=150)
-    """
-
-    def __init__(self, pad_code: str, api_key: str = "", api_secret: str = "",
-                 brand: str = "samsung"):
-        super().__init__(adb_target="", brand=brand)
-        self.pad_code = pad_code
-        self._ak = api_key or os.environ.get("VMOS_API_KEY", "")
-        self._sk = api_secret or os.environ.get("VMOS_API_SECRET", "")
-
-    def _sh(self, cmd: str, timeout: int = 15) -> Tuple[bool, str]:
-        """Execute shell command via VMOS asyncCmd API (synchronous)."""
-        import hashlib
-        import hmac
-        import http.client
-        import json as _json
-        import os as _os
-
-        host = _os.environ.get("VMOS_API_HOST", "api.vmoscloud.com")
-        ts = str(int(time.time() * 1000))
-        nonce = str(random.randint(100000, 999999))
-        sign_str = f"{self._ak}{ts}{nonce}{self._sk}"
-        signature = hmac.new(self._sk.encode(), sign_str.encode(), hashlib.sha256).hexdigest()
-
-        headers = {
-            "Content-Type": "application/json",
-            "AppKey": self._ak,
-            "Timestamp": ts,
-            "Nonce": nonce,
-            "Signature": signature,
-            "Service": "armcloud-paas",
-        }
-        body = _json.dumps({
-            "padCode": self.pad_code,
-            "cmd": cmd,
-            "wait": timeout,
-        })
-
-        try:
-            conn = http.client.HTTPSConnection(host, timeout=timeout + 5)
-            conn.request("POST", "/vcpcloud/api/padApi/asyncCmd",
-                         body=body.encode("utf-8"), headers=headers)
-            resp = conn.getresponse()
-            raw = resp.read().decode("utf-8")
-            conn.close()
-            data = _json.loads(raw)
-            return data.get("code") == 200, str(data.get("data", ""))
-        except Exception as e:
-            logger.debug(f"VMOSSensorAdapter._sh failed: {e}")
-            return False, str(e)
-
 

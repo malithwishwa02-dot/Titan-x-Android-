@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
-# Titan Cloud Phone — One-Command Deploy
-# Deploys a full cloud Android phone on any KVM VPS with Docker.
+# Titan Cloud Phone — One-Command Deploy (Cuttlefish)
+# Deploys a full cloud Android phone on any KVM VPS using Cuttlefish.
 #
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/.../deploy_cloud_phone.sh | bash
@@ -27,22 +27,26 @@ apt-get install -y -qq docker.io adb python3 python3-pip curl wget jq openssl 2>
 
 systemctl enable --now docker
 
-# ─── Phase 2: Kernel modules ─────────────────────────────────
-echo "[2/6] Loading kernel modules for Redroid..."
-modprobe binder_linux devices=binder,hwbinder,vndbinder 2>/dev/null || {
-    echo "  ⚠ binder_linux not found — trying to install..."
+# ─── Phase 2: Kernel modules for Cuttlefish ───────────────────────
+echo "[2/6] Loading kernel modules for Cuttlefish..."
+modprobe vhost_vsock 2>/dev/null || {
+    echo "  ⚠ vhost_vsock not found — trying to install..."
     apt-get install -y -qq linux-modules-extra-$(uname -r) 2>/dev/null || true
-    modprobe binder_linux devices=binder,hwbinder,vndbinder 2>/dev/null || {
-        echo "  ✗ FATAL: binder_linux not available. Redroid needs KVM VPS, not OpenVZ."
+    modprobe vhost_vsock 2>/dev/null || {
+        echo "  ✗ FATAL: vhost_vsock not available. Cuttlefish needs KVM VPS, not OpenVZ."
         exit 1
     }
 }
-echo "binder_linux" >> /etc/modules-load.d/titan.conf 2>/dev/null || true
-echo "  ✓ binder_linux loaded"
+echo "vhost_vsock" >> /etc/modules-load.d/titan.conf 2>/dev/null || true
+echo "  ✓ vhost_vsock loaded"
 
-# ─── Phase 3: Pull Docker images ─────────────────────────────
-echo "[3/6] Pulling Docker images (~6GB)..."
-docker pull redroid/redroid:14.0.0-latest
+# ─── Phase 3: Setup Cuttlefish + supporting images ─────────────────
+echo "[3/6] Setting up Cuttlefish + pulling supporting images..."
+CVD_HOME=/opt/titan/cuttlefish/cf
+mkdir -p "$CVD_HOME" /opt/titan/cuttlefish/images
+if [ -f "${TITAN_DIR}/scripts/setup_cuttlefish.sh" ]; then
+    bash "${TITAN_DIR}/scripts/setup_cuttlefish.sh"
+fi
 docker pull scavin/ws-scrcpy:latest
 docker pull nginx:alpine
 
@@ -61,28 +65,27 @@ if [ ! -f "$SSL_DIR/cert.pem" ]; then
         -subj "/CN=titan.cloud/O=Titan/C=US" 2>/dev/null
 fi
 
-# ─── Phase 6: Start services ─────────────────────────────────
+# ─── Phase 6: Start services ───────────────────────────────────────
 echo "[6/6] Starting cloud phone services..."
 
-# Stop old containers
-docker rm -f titan-android titan-scrcpy titan-api titan-nginx 2>/dev/null || true
+# Stop old containers (supporting services only)
+docker rm -f titan-scrcpy titan-nginx 2>/dev/null || true
 
-# Start Redroid Android
-docker run -d --name titan-android --privileged \
-    --restart unless-stopped \
-    --memory=3g --cpus=2 \
-    -p 5555:5555 \
-    -v titan-android-data:/data \
-    redroid/redroid:14.0.0-latest \
-    "androidboot.redroid_gpu_mode=guest" \
-    "androidboot.redroid_width=1080" \
-    "androidboot.redroid_height=2400" \
-    "androidboot.redroid_fps=30" \
-    "androidboot.redroid_dpi=420"
-
-echo "  Waiting for Android boot (40s)..."
-sleep 40
-adb connect 127.0.0.1:5555 2>/dev/null || true
+# Launch Cuttlefish Android VM
+CVD_HOME=/opt/titan/cuttlefish/cf
+if [ -x "$CVD_HOME/bin/launch_cvd" ]; then
+    cd "$CVD_HOME" && HOME="$CVD_HOME" ./bin/stop_cvd 2>/dev/null || true
+    cd "$CVD_HOME" && HOME="$CVD_HOME" ./bin/launch_cvd \
+        --daemon --cpus=2 --memory_mb=4096 \
+        --gpu_mode=guest_swiftshader \
+        --start_webrtc=true \
+        --report_anonymous_usage_stats=n &
+    echo "  Waiting for Cuttlefish boot (30s)..."
+    sleep 30
+    adb connect 127.0.0.1:6520 2>/dev/null || true
+else
+    echo "  ⚠ launch_cvd not found at $CVD_HOME/bin/ — run setup_cuttlefish.sh first"
+fi
 
 # Start ws-scrcpy
 docker run -d --name titan-scrcpy --network host \
@@ -92,6 +95,9 @@ docker run -d --name titan-scrcpy --network host \
 # Start Titan API
 cd "$TITAN_DIR"
 TITAN_DATA=/opt/titan/data \
+CVD_BIN_DIR=$CVD_HOME/bin \
+CVD_HOME_BASE=/opt/titan/cuttlefish \
+CVD_IMAGES_DIR=/opt/titan/cuttlefish/images \
 PYTHONPATH="$TITAN_DIR/server:$TITAN_DIR/core" \
 nohup python3 -m uvicorn server.titan_api:app \
     --host 0.0.0.0 --port 8080 --workers 1 \

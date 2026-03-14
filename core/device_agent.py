@@ -612,7 +612,7 @@ class DeviceAgent:
         # 2. THINK — ask LLM for next action
         screen_context = screen.to_llm_context()
 
-        # Vision fallback: when UI dump returns 0 elements (VMOS Cloud case),
+        # Vision fallback: when UI dump returns 0 elements (e.g. canvas-based UI),
         # use a vision model to describe the screen visually.
         if len(screen.elements) == 0 and screen.screenshot_b64:
             vision_desc_text = self._vision_describe_screen(screen.screenshot_b64, task.prompt)

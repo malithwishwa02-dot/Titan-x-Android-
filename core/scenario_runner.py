@@ -10,7 +10,7 @@ parameter combinations, retries failures, and filters results.
 Usage via API:
     POST /api/training/scenarios/run
     {
-        "device_ids": ["vmos-samsung-s24", "vmos-oneplus-ace3"],
+        "device_ids": ["dev-a1b2c3", "dev-d4e5f6"],
         "templates": ["install_app", "warmup_device", "search_google"],
         "params_sets": [
             {"app_name": "Chase"},

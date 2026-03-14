@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
 # Titan Cloud Phone — Auto-Bootstrap
-# Creates a Redroid device, patches stealth, forges profile, injects.
+# Creates a Cuttlefish device, patches stealth, forges profile, injects.
 # Run after docker-compose up or on a fresh VPS deployment.
 #
 # Usage: bash bootstrap_device.sh [API_URL]

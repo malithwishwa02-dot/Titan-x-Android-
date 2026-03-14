@@ -45,7 +45,7 @@ systemctl enable --now docker
 # ─── PHASE 2: Kernel modules + memfd fallback ───────────────────────
 echo "[2/8] Loading kernel modules..."
 modprobe binder_linux devices=binder,hwbinder,vndbinder 2>/dev/null || {
-    echo "WARN: binder_linux not available — Redroid may need custom kernel"
+    echo "WARN: binder_linux not available"
 }
 
 # memfd fallback: ashmem_linux deprecated in kernel 6.8+
@@ -73,10 +73,11 @@ options binder_linux devices=binder,hwbinder,vndbinder
 options v4l2loopback devices=4 video_nr=10,11,12,13 card_label="TitanCam0,TitanCam1,TitanCam2,TitanCam3" exclusive_caps=1
 EOF
 
-# ─── PHASE 3: Pull Docker images ────────────────────────────────────
-echo "[3/8] Pulling Docker images..."
-docker pull redroid/redroid:14.0.0-latest
-docker pull redroid/redroid:15.0.0-latest
+# ─── PHASE 3: Setup Cuttlefish + pull supporting Docker images ────────
+echo "[3/8] Setting up Cuttlefish + pulling supporting images..."
+if [ -f "${TITAN_DIR}/scripts/setup_cuttlefish.sh" ]; then
+    bash "${TITAN_DIR}/scripts/setup_cuttlefish.sh"
+fi
 docker pull scavin/ws-scrcpy:latest
 docker pull nginx:alpine
 docker pull searxng/searxng:latest

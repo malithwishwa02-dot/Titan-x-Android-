@@ -146,17 +146,17 @@ modprobe v4l2loopback devices=4 video_nr=10,11,12,13
 | `titan-v11-api` | systemd | 8080 | FastAPI backend, all API routes |
 | `titan-nginx` | Docker | 80/443 | Nginx SSL reverse proxy |
 | `ws-scrcpy` | Docker | 8000 | H264 Android screen streaming |
-| `titan-dev-us1` | Docker (legacy) | 5555 | Redroid Android 14 (Samsung S25 Ultra) |
+| `cuttlefish` | KVM (launch_cvd) | 6520 | Cuttlefish Android 15 VM |
 | `titan-gpu-tunnel` | systemd | — | autossh → Vast.ai GPU tunnels |
 | Ollama (CPU) | Docker | 11434 | Local qwen2.5:7b for AI fallback |
 | Ollama (GPU) | Vast.ai | 11435 (tunnel) | hermes3:8b primary AI model |
 
 **After VPS reboot:**
 ```bash
-systemctl start titan-gpu-tunnel titan-v11-api
-docker start titan-dev-us1 ws-scrcpy titan-nginx
-# Wait 40s for Android boot
-adb connect 127.0.0.1:5555
+modprobe vhost_vsock
+cd /opt/titan/cuttlefish/cf && HOME=$PWD ./bin/launch_cvd --daemon --cpus=2 --memory_mb=4096 --gpu_mode=guest_swiftshader --start_webrtc=true --report_anonymous_usage_stats=n
+systemctl start titan-api
+adb connect 127.0.0.1:6520
 ```
 
 ---
@@ -165,11 +165,11 @@ adb connect 127.0.0.1:5555
 
 | Version | Backend | Status | Notes |
 |---------|---------|--------|-------|
-| V9–V10 | Redroid (Android-in-Docker) | Deprecated | Docker container, no KVM, limited hardware fidelity |
-| V11.0–V11.2 | VMOS Cloud | Deprecated | Cloud Android API, unreliable, asyncCmd 2KB buffer limit |
+| V9–V10 | Redroid (Android-in-Docker) | Removed | Docker container, no KVM, limited hardware fidelity |
+| V11.0–V11.2 | VMOS Cloud | Removed | Cloud Android API, unreliable, asyncCmd 2KB buffer limit |
 | **V11.3** | **Cuttlefish (KVM)** | **Active** | Full VM, ARM translation, boot-time identity baking |
 
-### Why Cuttlefish Over Redroid
+### Why Cuttlefish
 
 1. **Identity baking** — `ro.product.*` and `ro.build.*` properties set via `extra_bootconfig_args` at VM launch, identical to real hardware boot flow
 2. **ARM translation** — `libndk_translation` native bridge enables ARM-only banking APKs on x86_64 hosts
@@ -177,9 +177,9 @@ adb connect 127.0.0.1:5555
 4. **Hardware fidelity** — Virtio devices for display/audio/camera, vsock for host communication
 5. **Magisk/root support** — Can push `su` and module paths without container privilege limits
 
-### VMOS Deprecation Notes
+### Legacy Code Removal (V11.3.2)
 
-The `vmos_cloud_bridge.py`, `vmos_cloud_patcher.py`, `vmos_agent_adapter.py`, and `vmos_screen_agent.py` modules are **retained for reference** but no longer invoked by any active code path. The `_run_inject_job_vmos()` and `_trust_score_vmos()` functions in `genesis.py` are similarly deprecated. All active code uses the ADB/Cuttlefish path.
+All VMOS and Redroid code has been removed from active code paths. Legacy modules (`vmos_cloud_bridge.py`, `vmos_cloud_patcher.py`, `vmos_agent_adapter.py`, `vmos_screen_agent.py`) and VMOS scripts have been moved to `_deprecated/` directories for archival reference. The `_run_inject_job_vmos()` and `_trust_score_vmos()` functions have been deleted from `genesis.py`. All active code uses the ADB/Cuttlefish path exclusively.
 
 ---
 

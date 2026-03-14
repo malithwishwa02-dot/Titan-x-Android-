@@ -175,34 +175,83 @@ def train_action_model(data_dir: str, output_dir: str,
     logger.info(f"Train: {len(train_data)} | Val: {len(val_data)}")
 
     try:
-        from unsloth import FastLanguageModel
         from trl import SFTTrainer, SFTConfig
         from datasets import Dataset
     except ImportError as e:
-        logger.error(f"Missing training dependencies: {e}")
-        logger.error("Install: pip install unsloth transformers datasets trl accelerate bitsandbytes")
+        logger.error(f"Missing core training dependencies: {e}")
         return False
 
-    # Load model with 4-bit quantization
-    logger.info(f"Loading {base_model} with 4-bit quantization...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=base_model,
-        max_seq_length=max_seq_len,
-        dtype=None,  # auto-detect
-        load_in_4bit=True,
-    )
+    # --- Try unsloth first (2x faster), fall back to standard PEFT ---
+    _use_unsloth = False
+    model = None
+    tokenizer = None
 
-    # Apply LoRA
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=rank,
-        lora_alpha=alpha,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=0.05,
-        bias="none",
-        use_gradient_checkpointing="unsloth",
-    )
+    try:
+        import warnings
+        warnings.filterwarnings("ignore")
+        from unsloth import FastLanguageModel
+        logger.info(f"Loading {base_model} via unsloth (4-bit QLoRA)...")
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=base_model,
+            max_seq_length=max_seq_len,
+            dtype=None,
+            load_in_4bit=True,
+        )
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=rank,
+            lora_alpha=alpha,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                            "gate_proj", "up_proj", "down_proj"],
+            lora_dropout=0.05,
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+        )
+        _use_unsloth = True
+        logger.info("Unsloth loaded successfully (2x faster training)")
+    except Exception as e:
+        logger.warning(f"Unsloth unavailable ({e.__class__.__name__}), falling back to standard PEFT")
+        _use_unsloth = False
+
+    if not _use_unsloth:
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+            from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
+        except ImportError as e:
+            logger.error(f"Missing standard PEFT dependencies: {e}")
+            return False
+
+        logger.info(f"Loading {base_model} via standard PEFT (4-bit via bitsandbytes)...")
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            quantization_config=bnb_config,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model = prepare_model_for_kbit_training(model)
+        lora_config = LoraConfig(
+            r=rank,
+            lora_alpha=alpha,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                            "gate_proj", "up_proj", "down_proj"],
+            lora_dropout=0.05,
+            bias="none",
+            task_type=TaskType.CAUSAL_LM,
+        )
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+        logger.info("Standard PEFT model loaded")
 
     # Format dataset for SFTTrainer
     def _format_chat(example):

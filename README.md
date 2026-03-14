@@ -4,10 +4,10 @@
 
 The evolution of mobile device virtualization has progressed from primitive emulated environments used primarily for application development to sophisticated, cloud-resident architectures capable of achieving functional parity with physical hardware. To deploy a cloud-based mobile device that operates indistinguishably from a regular handset, engineers must navigate a complex intersection of kernel-level configuration, hardware identity simulation, and behavioral pattern synthesis. The realization of a "perfect" mobile environment on Hostinger infrastructure requires an integrated stack — exemplified by the Titan V11.3 platform — that leverages the Kernel-based Virtual Machine (KVM) substrate to host high-performance Cuttlefish Android virtual machines. This document provides an exhaustive technical analysis of the deployment methodologies, stealth vectors, and performance optimizations required to maintain a fleet of undetectable cloud devices in the 2026 threat landscape.
 
-> **Migration Note (V11.3.2):** The platform has migrated from Redroid (Android-in-Docker)
-> to Cuttlefish (KVM-based Android VMs) for improved hardware fidelity, native ARM translation
-> via libndk_translation, and deeper control over boot-time identity baking. VMOS Cloud
-> integration has been deprecated.
+> **Migration Complete (V11.3.2):** The platform now exclusively uses Cuttlefish (KVM-based
+> Android VMs) for improved hardware fidelity, native ARM translation via libndk_translation,
+> and deeper control over boot-time identity baking. Legacy Redroid and VMOS Cloud backends
+> have been fully removed.
 
 ---
 
@@ -44,7 +44,7 @@ The Hostinger KVM 8 plan is the benchmark for large-scale mobile virtualization,
 | Storage Technology | 400 GB NVMe | Low-latency I/O for SQLite databases and media storage |
 | Network Throughput | 1 Gbps / 32 TB | Necessary for low-latency HD screen streaming |
 
-The AMD EPYC architecture is particularly conducive to Redroid deployments due to its advanced virtualization extensions, which minimize the performance penalty of running a guest Android kernel inside a Docker container on top of the host Linux kernel. While raw CPU power is rated highly, the stability of these environments is subject to the host's overall load and the specifics of the data center's thermal management.
+The AMD EPYC architecture is particularly conducive to Cuttlefish KVM deployments due to its advanced virtualization extensions, which minimize the performance penalty of running a guest Android kernel under hardware virtualization. While raw CPU power is rated highly, the stability of these environments is subject to the host's overall load and the specifics of the data center's thermal management.
 
 ### Mitigation of CPU Throttling and Resource Constraints
 
@@ -116,13 +116,13 @@ The `format_vps.py` script automates the interaction with the Hostinger VPS API 
 
 Android-in-Docker functionality is fundamentally dependent on the presence of the `binder_linux` and `ashmem_linux` kernel modules. On modern kernels like the 6.8.0 series found in Ubuntu 24.04, these modules are often absent from the default build or require manual activation. The Titan deployment script ensures these modules are loaded with specific parameters: `binder_linux` is initialized to create `binder`, `hwbinder`, and `vndbinder` devices, which are critical for Android's Inter-Process Communication (IPC) mechanisms.
 
-In cases where `ashmem_linux` is unavailable — a common occurrence in newer kernels where it has been deprecated in favor of `memfd` — the Redroid container must be configured to use memfd by setting the `sys.use_memfd=true` property during the boot process. Furthermore, the `v4l2loopback` module is loaded to create virtual video nodes (e.g., `/dev/video10-13`), which serve as the entry points for camera injection.
+For Cuttlefish, the `vhost_vsock` module must be loaded for host-guest communication. Furthermore, the `v4l2loopback` module is loaded to create virtual video nodes (e.g., `/dev/video10-13`), which serve as the entry points for camera injection.
 
 ---
 
 ## Cuttlefish VM Configuration and Deployment
 
-The mobile device environment is realized through Google Cuttlefish, a KVM-based Android Virtual Device (AVD) framework that runs full Android system images under hardware virtualization. Unlike Docker-based solutions (Redroid), Cuttlefish provides a complete virtual machine with its own kernel, hardware abstraction layer, and native ARM translation — achieving near-native performance with deeper hardware fidelity.
+The mobile device environment is realized through Google Cuttlefish, a KVM-based Android Virtual Device (AVD) framework that runs full Android system images under hardware virtualization. Cuttlefish provides a complete virtual machine with its own kernel, hardware abstraction layer, and native ARM translation — achieving near-native performance with deeper hardware fidelity.
 
 ### Cuttlefish Launch Architecture
 
@@ -344,8 +344,8 @@ The Nginx reverse proxy is configured to support high-throughput WebSockets and 
 The complete lifecycle of deploying a cloud device on Hostinger involves an orchestrated sequence of actions that transition the VPS from a generic server to a sophisticated mobile virtualization host.
 
 1. **VPS Formatting**: The Hostinger API is used to perform a fresh installation of Ubuntu 24.04, ensuring a clean environment.
-2. **Kernel Hardening**: Necessary modules (`binder_linux`, `v4l2loopback`) are loaded and persisted to ensure the AIC layer has full access to the required system primitives.
-3. **Titan Stack Deployment**: Docker pulls the optimized Redroid images, which already contain the GMS components and the ARM-to-x86 translation layer.
+2. **Kernel Hardening**: Necessary modules (`vhost_vsock`, `v4l2loopback`) are loaded and persisted to ensure the Cuttlefish VM layer has full access to the required system primitives.
+3. **Cuttlefish Deployment**: The setup script installs Cuttlefish binaries, fetches Android system images via `cvd fetch`, and prepares launch configurations for each device instance.
 4. **Device Instantiation**: The API creates mobile instances with hardware-consistent resolutions and system properties.
 5. **Stealth Patching**: The anomaly patcher suppresses virtualization signals and simulates a realistic telephony and hardware environment.
 6. **Behavioral Injection**: The Genesis Forge populates the device with aged communication logs, media, and trust-building cookies.
@@ -429,10 +429,9 @@ titan-v11.3-device/
 |   '-- launch_config_template.json  Default CVD launch config
 |-- docker/                      Docker configuration (API + supporting services)
 |   |-- Dockerfile.titan-api    API server image
-|   |-- Dockerfile.redroid-gms  [DEPRECATED] Old Redroid image
-|   |-- docker-compose.prod.yml Production compose (API + scrcpy + nginx)
+|   |-- docker-compose.yml      Production compose (API + scrcpy + nginx)
 |   |-- nginx.conf              Reverse proxy (SSL + WebSocket)
-|   '-- init.d/                 [DEPRECATED] Old Redroid boot scripts
+|   '-- _deprecated/            Archived legacy scripts
 |-- scripts/                     Deployment and utility scripts
 |   |-- setup_cuttlefish.sh     Cuttlefish host setup (KVM, modules, tools)
 |   |-- deploy_titan_v11.3.sh   Full VPS deployment (8 phases)
@@ -465,7 +464,7 @@ The deployment of a cloud-resident mobile device on Hostinger that functions wit
 ## References
 
 1. [malithwishwa02-dot/titan-x-android-](https://github.com/malithwishwa02-dot/Titan-x-Android-)
-2. [Redroid (Remote-Android) Documentation](https://github.com/remote-android/redroid-doc)
+2. [Google Cuttlefish Documentation](https://source.android.com/docs/setup/create/cuttlefish)
 3. [Hostinger KVM Virtualization](https://www.hostinger.com/support/6988144-what-is-kvm-virtualization-at-hostinger/)
 4. [Hostinger VPS Hosting](https://www.hostinger.com/vps-hosting)
 5. [Hostinger KVM 8 Benchmarks](https://www.vpsbenchmarks.com/trials/hostinger_performance_trial_12Jan2026)
@@ -474,10 +473,10 @@ The deployment of a cloud-resident mobile device on Hostinger that functions wit
 8. [Hostinger Suspension Policies](https://onlinemediamasters.com/hostinger-review/)
 9. [Hostinger Ubuntu VPS](https://www.hostinger.com/vps/ubuntu-hosting)
 10. [Hostinger GitLab VPS Template](https://www.hostinger.com/support/8583863-how-to-use-the-gitlab-vps-template-at-hostinger/)
-11. [Olares Redroid Guide](https://docs.olares.com/use-cases/host-cloud-android.html)
-12. [Binder/Ashmem Kernel Modules Discussion](https://community.endlessos.com/t/discussion-ship-with-ashmem-linux-and-binder-linux-kernel-modules/16570)
-13. [Ashmem Module Issue](https://github.com/waydroid/waydroid/issues/1583)
-14. [Redroid Docker Installation Guide](https://ivonblog.com/en-us/posts/redroid-android-docker/)
+11. [Cuttlefish Getting Started](https://android.googlesource.com/device/google/cuttlefish/)
+12. [vhost_vsock Kernel Module](https://www.kernel.org/doc/html/latest/networking/vsock.html)
+13. [Cuttlefish Build Guide](https://source.android.com/docs/setup/create/cuttlefish-use)
+14. [KVM Virtualization on Linux](https://wiki.archlinux.org/title/KVM)
 15. [Play Integrity 2026](https://www.reddit.com/r/AndroidRootPokemonGo/comments/1r2w1lv/play_integrity_in_2026_basic_vs_device_vs_strong/)
 16. [Mobile Trust Gap Analysis](https://licelus.com/insights/why-trusted-signals-are-the-key-to-closing-the-widening-mobile-trust-gap)
 17. [Titan M3 Security Chip](https://android.gadgethacks.com/news/pixel-11-titan-m3-security-chip-5-year-upgrade-revealed/)

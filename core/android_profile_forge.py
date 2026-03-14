@@ -573,7 +573,9 @@ class AndroidProfileForge:
         # Weight: more calls to frequent contacts (Pareto)
         contact_weights = [1.0 / (i + 1) ** 0.8 for i in range(len(contacts))]
 
-        for _ in range(num_calls):
+        # Phase 1: Distributed calls (Poisson-distributed across timeline)
+        distributed_count = int(num_calls * 0.7)
+        for _ in range(distributed_count):
             contact = rng.choices(contacts, weights=contact_weights[:len(contacts)], k=1)[0]
             dt = _random_datetime(rng, now, 0, age_days, circadian_weights, tz_offset)
             call_type = rng.choices([1, 2, 3], weights=[35, 45, 20], k=1)[0]  # in/out/missed
@@ -597,6 +599,41 @@ class AndroidProfileForge:
                 "duration": duration,
                 "date": int(dt.timestamp() * 1000),
             })
+
+        # Phase 2: Poisson burst clusters — humans exhibit clustered calling
+        # patterns (e.g., 3-5 rapid calls coordinating an event, followed by
+        # hours of silence). Without bursts, call logs show unnaturally even
+        # distribution that behavioral analyzers flag.
+        burst_count = num_calls - distributed_count
+        num_bursts = max(1, burst_count // 5)
+        for _ in range(num_bursts):
+            burst_contact = rng.choices(contacts, weights=contact_weights[:len(contacts)], k=1)[0]
+            burst_start = _random_datetime(rng, now, 0, min(age_days, 60),
+                                            circadian_weights, tz_offset)
+            cluster_size = rng.randint(2, 6)
+            for c in range(min(cluster_size, burst_count)):
+                # Inter-call gap within burst: 1-15 minutes (redial, callback patterns)
+                gap_minutes = rng.choices([1, 2, 5, 10, 15], weights=[30, 25, 20, 15, 10], k=1)[0]
+                call_dt = burst_start + timedelta(minutes=c * gap_minutes + rng.randint(0, 2))
+                call_type = rng.choices([1, 2, 3], weights=[30, 50, 20], k=1)[0]
+
+                duration = 0
+                if call_type == 1:
+                    duration = rng.randint(5, 60)
+                elif call_type == 2:
+                    duration = rng.randint(5, 45)
+
+                logs.append({
+                    "number": burst_contact["phone"],
+                    "type": call_type,
+                    "duration": duration,
+                    "date": int(call_dt.timestamp() * 1000),
+                })
+                burst_count -= 1
+                if burst_count <= 0:
+                    break
+            if burst_count <= 0:
+                break
 
         logs.sort(key=lambda x: x["date"], reverse=True)
         return logs

@@ -447,6 +447,55 @@ class WalletProvisioner:
                 VALUES (?, 'LUK', ?, 0, ?)
             """, (token_id, created_ms + 86400000, created_ms))
 
+            # Transaction history — forensic depth for behavioral trust scoring.
+            # A card with zero transaction history is flagged as newly injected.
+            # Generating 3-10 historical transactions makes the wallet appear
+            # organically provisioned and actively used.
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS transaction_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_id INTEGER NOT NULL,
+                    merchant_name TEXT,
+                    merchant_category_code INTEGER DEFAULT 5411,
+                    amount_micros INTEGER NOT NULL,
+                    currency_code TEXT DEFAULT 'USD',
+                    transaction_type TEXT DEFAULT 'CONTACTLESS',
+                    transaction_status TEXT DEFAULT 'COMPLETED',
+                    timestamp_ms INTEGER NOT NULL,
+                    receipt_url TEXT DEFAULT '',
+                    FOREIGN KEY (token_id) REFERENCES tokens(id)
+                )
+            """)
+
+            TX_MERCHANTS = [
+                ("Starbucks", 5814, 475, 895),
+                ("Target", 5411, 1299, 8999),
+                ("Whole Foods", 5411, 2199, 12500),
+                ("Shell Gas", 5541, 3500, 6500),
+                ("Uber", 4121, 899, 4500),
+                ("Amazon.com", 5942, 999, 14999),
+                ("Walgreens", 5912, 399, 2999),
+                ("Subway", 5812, 699, 1399),
+                ("Netflix", 4899, 1599, 1599),
+                ("Spotify", 4899, 1099, 1099),
+            ]
+
+            num_txns = random.randint(3, 10)
+            for _ in range(num_txns):
+                merchant_name, mcc, lo_cents, hi_cents = random.choice(TX_MERCHANTS)
+                amount_cents = random.randint(lo_cents, hi_cents)
+                amount_micros = amount_cents * 10000  # cents → micros
+                # Spread transactions over the card's lifetime
+                tx_ts = created_ms + random.randint(0, max(1, last_used_ms - created_ms))
+                tx_type = random.choice(["CONTACTLESS", "CONTACTLESS", "IN_APP", "ONLINE"])
+
+                c.execute("""
+                    INSERT INTO transaction_history
+                    (token_id, merchant_name, merchant_category_code, amount_micros,
+                     currency_code, transaction_type, transaction_status, timestamp_ms)
+                    VALUES (?, ?, ?, ?, 'USD', ?, 'COMPLETED', ?)
+                """, (token_id, merchant_name, mcc, amount_micros, tx_type, tx_ts))
+
             conn.commit()
             conn.close()
 
@@ -517,7 +566,25 @@ class WalletProvisioner:
 
     def _provision_play_store(self, last4: str, network_info: Dict,
                               persona_email: str, result: WalletProvisionResult):
-        """Write Play Store billing SharedPreferences with payment method."""
+        """Write Play Store billing SharedPreferences with payment method.
+
+        CLOUD RECONCILIATION WARNING:
+        Payment profiles in the Play Store are server-side assets governed by
+        Google Payments infrastructure. When com.android.vending syncs with
+        the cloud, Google Play Services initiates an aggressive state
+        reconciliation protocol. Because locally injected COIN.xml references
+        a payment instrument never authenticated through the official Google
+        payment gateway, the backend may overwrite it, purging the injected
+        profile. Mitigation strategies:
+          1. Keep com.android.vending force-stopped or network-isolated after
+             injection to delay cloud sync reconciliation.
+          2. For persistent wallet functionality, use UI-driven tokenization
+             via TouchSimulator + DeviceAgent to add the card through the
+             legitimate Google Pay flow, which properly authenticates with
+             TSP backends and generates hardware-backed LUKs.
+          3. GMS billing state sync (_provision_gms_billing) reduces the
+             reconciliation risk by pre-seeding the expected server-side state.
+        """
         try:
             _adb_shell(self.target, "am force-stop com.android.vending")
             time.sleep(1)
@@ -544,8 +611,14 @@ class WalletProvisioner:
                 billing_prefs, "com.android.vending",
             )
 
+            # Prevent immediate cloud sync by keeping vending stopped and
+            # disabling its background data temporarily
+            _adb_shell(self.target,
+                "cmd appops set com.android.vending RUN_IN_BACKGROUND deny 2>/dev/null")
+            logger.info(f"  Play Store billing: {network_info['name']} ****{last4} "
+                        "(cloud sync delayed — vending background denied)")
+
             result.play_store_ok = True
-            logger.info(f"  Play Store billing: {network_info['name']} ****{last4}")
 
         except Exception as e:
             result.errors.append(f"play_store_billing: {e}")
