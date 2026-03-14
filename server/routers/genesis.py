@@ -158,7 +158,7 @@ _inject_jobs: Dict[str, dict] = {}
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# VMOS HELPERS
+# VMOS HELPERS [DEPRECATED — retained for reference, no longer called]
 # ═══════════════════════════════════════════════════════════════════════
 
 def _get_vmos_bridge():
@@ -291,7 +291,7 @@ def _convert_profile_to_vmos(profile_data: dict, card_data: Optional[dict] = Non
 
     result["chrome_commands"] = chrome_cmds
 
-    # -- Wallet commands (full tapandpay.db schema — matches wallet_provisioner.py for Redroid)
+    # -- Wallet commands (full tapandpay.db schema — matches wallet_provisioner.py)
     wallet_cmds: List[str] = []
     wallet_dir = "/data/data/com.google.android.apps.walletnfcrel"
     wallet_cmds.append(f"mkdir -p {wallet_dir}/databases {wallet_dir}/shared_prefs")
@@ -404,7 +404,7 @@ def _run_inject_job_vmos(job_id: str, pad_code: str, profile_data: dict,
 
 def _run_inject_job(job_id: str, adb_target: str, profile_data: dict,
                     card_data: dict, device_id: str, profile_id: str):
-    """Background worker for profile injection (ADB/Redroid path)."""
+    """Background worker for profile injection (ADB path)."""
     job = _inject_jobs[job_id]
     try:
         injector = ProfileInjector(adb_target=adb_target)
@@ -450,20 +450,12 @@ async def genesis_inject(device_id: str, body: GenesisInjectBody):
         "profile_id": body.profile_id, "started_at": _time.time(),
     }
 
-    # Route by device type: VMOS Cloud vs Redroid/ADB
-    if getattr(dev, "device_type", "redroid") == "vmos_cloud":
-        pad_code = getattr(dev, "vmos_pad_code", "") or device_id
-        t = threading.Thread(
-            target=_run_inject_job_vmos,
-            args=(job_id, pad_code, profile_data, card_data, device_id, body.profile_id),
-            daemon=True,
-        )
-    else:
-        t = threading.Thread(
-            target=_run_inject_job,
-            args=(job_id, dev.adb_target, profile_data, card_data, device_id, body.profile_id),
-            daemon=True,
-        )
+    # All devices use ADB injection (Cuttlefish backend)
+    t = threading.Thread(
+        target=_run_inject_job,
+        args=(job_id, dev.adb_target, profile_data, card_data, device_id, body.profile_id),
+        daemon=True,
+    )
     t.start()
 
     return {
@@ -489,11 +481,7 @@ async def genesis_trust_score(device_id: str):
     if not dev:
         raise HTTPException(404, "Device not found")
 
-    # ── VMOS Cloud path ───────────────────────────────────────────
-    if getattr(dev, "device_type", "redroid") == "vmos_cloud":
-        return await _trust_score_vmos(device_id, dev)
-
-    # ── Redroid / ADB path ────────────────────────────────────────
+    # ── ADB path (Cuttlefish) ─────────────────────────────────────
     from device_manager import _adb_shell as dm_shell
     t = dev.adb_target
     checks = {}
@@ -677,21 +665,14 @@ async def genesis_age_device(device_id: str, body: AgeDeviceBody):
 
     dev = dm.get_device(device_id) if dm else None
 
-    # ── VMOS Cloud path ───────────────────────────────────────────
-    if dev and getattr(dev, "device_type", "redroid") == "vmos_cloud":
-        return await _age_device_vmos(device_id, dev, body)
-
-    # ── Redroid / ADB path ────────────────────────────────────────
+    # ── ADB path (Cuttlefish) ─────────────────────────────────────
     try:
         from anomaly_patcher import AnomalyPatcher
-        adb_target = "127.0.0.1:5555"
+        adb_target = "127.0.0.1:6520"
         if dev:
-            host = dev.config.get("host", "127.0.0.1")
-            port = dev.config.get("adb_port", 5555)
-            adb_target = f"{host}:{port}"
+            adb_target = dev.adb_target
 
-        container_name = f"titan-dev-{device_id}"
-        patcher = AnomalyPatcher(adb_target=adb_target, container=container_name)
+        patcher = AnomalyPatcher(adb_target=adb_target)
         loop = asyncio.get_event_loop()
         fn = functools.partial(
             patcher.full_patch,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Direct SQLite injection of SMS into Redroid mmssms.db."""
+"""Direct SQLite injection of SMS into Android VM mmssms.db."""
 import os
 import sqlite3
 import subprocess

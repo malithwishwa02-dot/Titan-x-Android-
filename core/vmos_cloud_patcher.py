@@ -1,18 +1,14 @@
 """
-Titan V11.3 — VMOS Cloud Stealth Patcher
-=========================================
+Titan V11.3 — VMOS Cloud Stealth Patcher [DEPRECATED]
+======================================================
+DEPRECATED: This module is no longer used. The Titan platform has migrated
+from VMOS Cloud to Cuttlefish KVM-based Android VMs. All stealth patching
+is now handled by anomaly_patcher.py (Cuttlefish-aware, 65+ vectors).
+
+This file is retained for reference only and will be removed in a future release.
+
+Original description:
 Applies all stealth patches to VMOS Cloud devices via asyncCmd shell execution.
-Does NOT use updatePadAndroidProp (documented NOOP on v2.0+ instances).
-
-The device model is LOCKED by the VMOS hypervisor template and cannot be changed.
-This patcher focuses on everything else: telephony, timezone, network interfaces,
-/proc masking, RASP hardening, battery simulation, and behavioral data injection.
-
-Usage:
-    from vmos_cloud_patcher import VMOSCloudPatcher
-    patcher = VMOSCloudPatcher(bridge, "ACP2509244LGV1MV")
-    report = await patcher.full_patch(carrier="att_us", location="la")
-    verify = await patcher.verify()
 """
 
 import asyncio

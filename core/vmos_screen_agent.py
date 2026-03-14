@@ -1,16 +1,14 @@
 """
-Titan V11.3 — VMOS Screen Agent
+Titan V11.3 — VMOS Screen Agent [DEPRECATED]
+==============================================
+DEPRECATED: This module is no longer used. The Titan platform has migrated
+from VMOS Cloud to Cuttlefish KVM-based Android VMs. All AI-powered device
+interaction is now handled by device_agent.py with standard ADB screenshots.
+
+This file is retained for reference only and will be removed in a future release.
+
+Original description:
 AI-powered screen reading and human-like task automation for VMOS Cloud devices.
-
-Uses Ollama vision models (LLaVA / MiniCPM-V) to understand device screenshots,
-then executes actions through the VMOS Cloud API (touch, type, swipe, shell).
-
-Architecture:
-    1. Screenshot capture via VMOS Cloud API
-    2. Vision LLM analyzes screen → structured understanding
-    3. Task planner decides next action
-    4. Action executor performs touch/type/swipe via VMOS API
-    5. Loop until task is complete
 
 Usage:
     agent = VMOSScreenAgent(pad_code="ACP2509244LGV1MV")

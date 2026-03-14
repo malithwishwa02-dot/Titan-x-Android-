@@ -1,5 +1,5 @@
 """
-Titan V11.3 — Devices Router
+Titan V11.3 — Devices Router (Cuttlefish)
 /api/devices/* — Device CRUD, streaming, screenshots, input
 """
 
@@ -87,7 +87,7 @@ async def create_device(body: CreateDeviceBody):
             defaults = COUNTRY_DEFAULTS.get(body.country, {})
             location = defaults.get("location", "nyc")
 
-        patcher = AnomalyPatcher(adb_target=dev.adb_target, container=dev.container)
+        patcher = AnomalyPatcher(adb_target=dev.adb_target)
         patch_result = patcher.full_patch(body.model, body.carrier, location)
         dev.patch_result = patch_result.to_dict()
         dev.stealth_score = patch_result.score

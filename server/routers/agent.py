@@ -32,19 +32,6 @@ def _get_agent(device_id: str):
     if not dev:
         raise HTTPException(404, "Device not found")
     if device_id not in _agents:
-        if dev.device_type == "vmos_cloud" and dev.vmos_pad_code:
-            try:
-                from routers.vmos import _get_vmos
-                bridge = _get_vmos()
-                if bridge:
-                    from vmos_agent_adapter import VMOSScreenAdapter, VMOSTouchAdapter
-                    agent = DeviceAgent(adb_target=dev.adb_target or "vmos-api")
-                    agent.analyzer = VMOSScreenAdapter(bridge=bridge, pad_code=dev.vmos_pad_code)
-                    agent.touch = VMOSTouchAdapter(bridge=bridge, pad_code=dev.vmos_pad_code)
-                    _agents[device_id] = agent
-                    return agent
-            except Exception:
-                pass
         _agents[device_id] = DeviceAgent(adb_target=dev.adb_target)
     return _agents[device_id]
 

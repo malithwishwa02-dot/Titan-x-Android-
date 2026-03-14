@@ -1,6 +1,11 @@
 """
-Titan V11.3 — VMOS Cloud Router
+Titan V11.3 — VMOS Cloud Router [DEPRECATED]
 /api/vmos/* — VMOS Cloud bridge API endpoints
+
+DEPRECATED: This router is no longer registered in titan_api.py.
+The Titan platform has migrated from VMOS Cloud to Cuttlefish KVM VMs.
+All device management is now via /api/devices/* endpoints.
+This file is retained for reference only.
 """
 
 import logging

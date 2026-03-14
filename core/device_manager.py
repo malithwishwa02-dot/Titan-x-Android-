@@ -1,7 +1,10 @@
 """
-Titan V11.3 — Device Manager
-Creates, destroys, patches, and manages Redroid Android containers.
-Each device gets: unique ADB port, data volume, identity preset, anomaly patching.
+Titan V11.3 — Device Manager (Cuttlefish KVM Backend)
+Creates, destroys, patches, and manages Cuttlefish Android virtual machines.
+Each device gets: unique ADB port, KVM instance, identity preset, anomaly patching.
+
+Cuttlefish uses launch_cvd / stop_cvd binaries to manage full Android VMs
+running under KVM with near-native performance.
 
 Usage:
     mgr = DeviceManager()
@@ -29,10 +32,13 @@ logger = logging.getLogger("titan.device-manager")
 
 TITAN_DATA = Path(os.environ.get("TITAN_DATA", "/opt/titan/data"))
 DEVICES_DIR = TITAN_DATA / "devices"
-REDROID_IMAGE = os.environ.get("REDROID_IMAGE", "redroid-titan:14")
-BASE_ADB_PORT = 5555
+CVD_HOME_BASE = Path(os.environ.get("CVD_HOME_BASE", "/opt/titan/cuttlefish"))
+CVD_BIN_DIR = Path(os.environ.get("CVD_BIN_DIR", "/opt/android-cuttlefish/bin"))
+CVD_IMAGES_DIR = Path(os.environ.get("CVD_IMAGES_DIR", "/opt/titan/cuttlefish/images"))
+BASE_ADB_PORT = 6520
+BASE_VNC_PORT = 6444
 MAX_DEVICES = 8
-CONTAINER_PREFIX = "titan-dev-"
+INSTANCE_PREFIX = "titan-cvd-"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -49,14 +55,16 @@ class CreateDeviceRequest:
     screen_width: int = 1080
     screen_height: int = 2400
     dpi: int = 420
+    memory_mb: int = 4096
+    cpus: int = 4
 
 
 @dataclass
 class DeviceInstance:
     id: str = ""
-    container: str = ""
-    adb_port: int = 5555
-    adb_target: str = "127.0.0.1:5555"
+    container: str = ""               # legacy compat — maps to instance name
+    adb_port: int = 6520
+    adb_target: str = "127.0.0.1:6520"
     config: Dict[str, Any] = field(default_factory=dict)
     state: str = "created"
     created_at: str = ""
@@ -64,8 +72,10 @@ class DeviceInstance:
     patch_result: Dict[str, Any] = field(default_factory=dict)
     installed_apps: List[str] = field(default_factory=list)
     stealth_score: int = 0
-    device_type: str = "redroid"       # "redroid" | "vmos_cloud" | "emulator"
-    vmos_pad_code: str = ""            # VMOS Cloud instance code (e.g. "ACP250331GLMP7YX")
+    device_type: str = "cuttlefish"    # "cuttlefish" (primary) | "redroid" (legacy)
+    instance_num: int = 1              # Cuttlefish --base_instance_num
+    cvd_home: str = ""                 # Cuttlefish HOME directory for this instance
+    vnc_port: int = 6444               # VNC display port
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -75,9 +85,13 @@ class DeviceInstance:
 # SHELL HELPERS
 # ═══════════════════════════════════════════════════════════════════════
 
-def _run(cmd: str, timeout: int = 60) -> Dict[str, Any]:
+def _run(cmd: str, timeout: int = 60, env: Dict[str, str] = None) -> Dict[str, Any]:
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        run_env = os.environ.copy()
+        if env:
+            run_env.update(env)
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                           timeout=timeout, env=run_env)
         return {"ok": r.returncode == 0, "stdout": r.stdout.strip(), "stderr": r.stderr.strip()}
     except subprocess.TimeoutExpired:
         return {"ok": False, "stdout": "", "stderr": "timeout"}
@@ -99,10 +113,11 @@ def _adb_shell(target: str, cmd: str, timeout: int = 15) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 class DeviceManager:
-    """Manages multiple Redroid device containers."""
+    """Manages multiple Cuttlefish Android virtual machines via launch_cvd/stop_cvd."""
 
     def __init__(self):
         DEVICES_DIR.mkdir(parents=True, exist_ok=True)
+        CVD_HOME_BASE.mkdir(parents=True, exist_ok=True)
         self._devices: Dict[str, DeviceInstance] = {}
         self._load_state()
 
@@ -136,134 +151,172 @@ class DeviceManager:
     def get_device(self, device_id: str) -> Optional[DeviceInstance]:
         return self._devices.get(device_id)
 
-    def _next_port(self) -> int:
-        used = {d.adb_port for d in self._devices.values()}
-        for port in range(BASE_ADB_PORT, BASE_ADB_PORT + MAX_DEVICES + 5):
-            if port not in used:
-                return port
-        raise RuntimeError("No available ADB ports")
+    def _next_instance_num(self) -> int:
+        used = {d.instance_num for d in self._devices.values()}
+        for num in range(1, MAX_DEVICES + 5):
+            if num not in used:
+                return num
+        raise RuntimeError("No available Cuttlefish instance numbers")
+
+    def _instance_adb_port(self, instance_num: int) -> int:
+        return BASE_ADB_PORT + instance_num - 1
+
+    def _instance_vnc_port(self, instance_num: int) -> int:
+        return BASE_VNC_PORT + instance_num - 1
+
+    def _generate_cvd_config(self, req: CreateDeviceRequest,
+                              preset=None) -> Dict[str, Any]:
+        """Generate Cuttlefish JSON config for launch_cvd."""
+        # Build extra_bootconfig_args with device identity props
+        boot_props = [
+            "androidboot.verifiedbootstate=green",
+            "androidboot.vbmeta.device_state=locked",
+            "sys.use_memfd=true",
+        ]
+        if preset:
+            boot_props.extend([
+                f"androidboot.hardware={preset.hardware}",
+                f"ro.product.brand={preset.brand}",
+                f"ro.product.manufacturer={preset.manufacturer}",
+                f"ro.product.model={preset.model}",
+                f"ro.product.device={preset.device}",
+                f"ro.product.name={preset.product}",
+                f"ro.build.fingerprint={preset.fingerprint}",
+                f"ro.build.display.id={preset.build_id}",
+                f"ro.build.version.release={preset.android_version}",
+                f"ro.build.version.sdk={preset.sdk_version}",
+                f"ro.build.version.security_patch={preset.security_patch}",
+                f"ro.build.type={preset.build_type}",
+                f"ro.build.tags={preset.build_tags}",
+                f"ro.board.platform={preset.board}",
+                f"ro.bootloader={preset.bootloader}",
+                f"ro.baseband={preset.baseband}",
+                f"ro.sf.lcd_density={preset.lcd_density}",
+                f"ro.boot.flash.locked=1",
+                f"ro.build.selinux=1",
+                f"ro.allow.mock.location=0",
+                f"ro.kernel.qemu=0",
+                f"ro.hardware.virtual=0",
+                f"ro.boot.qemu=0",
+            ])
+
+        config = {
+            "instances": [{
+                "vm": {
+                    "memory_mb": req.memory_mb,
+                    "cpus": req.cpus,
+                },
+                "graphics": {
+                    "displays": [{
+                        "width": req.screen_width,
+                        "height": req.screen_height,
+                        "dpi": req.dpi,
+                    }]
+                },
+                "boot": {
+                    "extra_bootconfig_args": " ".join(boot_props),
+                },
+            }]
+        }
+        return config
 
     async def create_device(self, req: CreateDeviceRequest) -> DeviceInstance:
         if len(self._devices) >= MAX_DEVICES:
             raise RuntimeError(f"Max {MAX_DEVICES} devices reached")
 
         dev_id = f"dev-{secrets.token_hex(3)}"
-        port = self._next_port()
-        container = f"{CONTAINER_PREFIX}{dev_id}"
-        data_dir = DEVICES_DIR / dev_id / "data"
+        instance_num = self._next_instance_num()
+        adb_port = self._instance_adb_port(instance_num)
+        vnc_port = self._instance_vnc_port(instance_num)
+        instance_name = f"{INSTANCE_PREFIX}{dev_id}"
+
+        # Create per-instance home directory for Cuttlefish
+        cvd_home = CVD_HOME_BASE / dev_id
+        cvd_home.mkdir(parents=True, exist_ok=True)
+
+        # Also create device data dir for Titan metadata
+        data_dir = DEVICES_DIR / dev_id
         data_dir.mkdir(parents=True, exist_ok=True)
 
         dev = DeviceInstance(
             id=dev_id,
-            container=container,
-            adb_port=port,
-            adb_target=f"127.0.0.1:{port}",
+            container=instance_name,
+            adb_port=adb_port,
+            adb_target=f"127.0.0.1:{adb_port}",
             config=asdict(req) if hasattr(req, '__dataclass_fields__') else req.__dict__,
             state="creating",
             created_at=datetime.now(timezone.utc).isoformat(),
+            device_type="cuttlefish",
+            instance_num=instance_num,
+            cvd_home=str(cvd_home),
+            vnc_port=vnc_port,
         )
         self._devices[dev_id] = dev
         self._save_state()
 
-        # Resolve device preset for Docker identity props
+        # Resolve device preset for identity props
         from device_presets import DEVICE_PRESETS
         preset = DEVICE_PRESETS.get(req.model)
 
-        # Build Docker launch command with full device identity baked in
-        identity_args = ""
-        if preset:
-            identity_args = (
-                f"ro.product.brand={preset.brand} "
-                f"ro.product.manufacturer={preset.manufacturer} "
-                f"ro.product.model={preset.model} "
-                f"ro.product.device={preset.device} "
-                f"ro.product.name={preset.product} "
-                f"ro.build.fingerprint={preset.fingerprint} "
-                f"ro.build.display.id={preset.build_id} "
-                f"ro.build.version.release={preset.android_version} "
-                f"ro.build.version.sdk={preset.sdk_version} "
-                f"ro.build.version.security_patch={preset.security_patch} "
-                f"ro.build.type={preset.build_type} "
-                f"ro.build.tags={preset.build_tags} "
-                f"ro.hardware={preset.hardware} "
-                f"ro.board.platform={preset.board} "
-                f"ro.bootloader={preset.bootloader} "
-                f"ro.baseband={preset.baseband} "
-                f"ro.sf.lcd_density={preset.lcd_density} "
-                f"ro.boot.verifiedbootstate=green "
-                f"ro.boot.vbmeta.device_state=locked "
-                f"ro.boot.flash.locked=1 "
-                f"ro.build.selinux=1 "
-                f"ro.allow.mock.location=0 "
-                f"ro.kernel.qemu=0 "
-                f"ro.hardware.virtual=0 "
-                f"ro.boot.qemu=0 "
-            )
+        # Generate Cuttlefish JSON config with device identity baked in
+        cvd_config = self._generate_cvd_config(req, preset)
+        config_path = cvd_home / "cvd_config.json"
+        config_path.write_text(json.dumps(cvd_config, indent=2))
+        logger.info(f"Wrote CVD config: {config_path}")
 
-        docker_cmd = (
-            f"docker run -d --privileged "
-            f"--name {container} "
-            f"-v {data_dir}:/data "
-            f"-v /dev/binderfs:/dev/binderfs "
-            f"-p 127.0.0.1:{port}:5555 "
-            f"--memory=3g --cpus=2 "
-            f"{REDROID_IMAGE} "
-            f"androidboot.redroid_width={req.screen_width} "
-            f"androidboot.redroid_height={req.screen_height} "
-            f"androidboot.redroid_dpi={req.dpi} "
-            f"androidboot.redroid_fps=60 "
-            f"androidboot.redroid_gpu_mode=guest "
-            f"androidboot.redroid_net_ndns=2 "
-            f"androidboot.redroid_net_dns1=8.8.8.8 "
-            f"androidboot.redroid_net_dns2=8.8.4.4 "
-            f"{identity_args}"
+        # Determine launch_cvd binary path
+        launch_cvd = CVD_BIN_DIR / "launch_cvd"
+        if not launch_cvd.exists():
+            # Fallback: check if it's on PATH
+            launch_cvd = Path(shutil.which("launch_cvd") or "launch_cvd")
+
+        # Build launch_cvd command
+        cvd_cmd = (
+            f"{launch_cvd} "
+            f"--config_file={config_path} "
+            f"--base_instance_num={instance_num} "
+            f"--daemon "
+            f"--report_anonymous_usage_stats=n "
         )
 
-        logger.info(f"Creating device {dev_id} on port {port}")
-        result = _run(docker_cmd, timeout=120)
+        # Add image directory if configured
+        if CVD_IMAGES_DIR.exists():
+            system_img = CVD_IMAGES_DIR / "system.img"
+            if system_img.exists():
+                cvd_cmd += f"--system_image_dir={CVD_IMAGES_DIR} "
+
+        logger.info(f"Creating Cuttlefish device {dev_id} (instance {instance_num})")
+        result = _run(cvd_cmd, timeout=180, env={"HOME": str(cvd_home)})
 
         if not result["ok"]:
             dev.state = "error"
             dev.error = result["stderr"]
             self._save_state()
-            raise RuntimeError(f"Docker create failed: {result['stderr']}")
+            raise RuntimeError(f"launch_cvd failed: {result['stderr']}")
 
         dev.state = "booting"
         self._save_state()
-
-        # Inject host ADB key into container for authorization
-        await asyncio.sleep(3)  # Let container init start
-        adb_key_path = Path.home() / ".android" / "adbkey.pub"
-        if adb_key_path.exists():
-            key_data = adb_key_path.read_text().strip()
-            _run(f"docker exec {container} mkdir -p /data/misc/adb", timeout=10)
-            _run(f"docker exec {container} sh -c 'echo \"{key_data}\" > /data/misc/adb/adb_keys'", timeout=10)
-            _run(f"docker exec {container} chmod 640 /data/misc/adb/adb_keys", timeout=10)
-            logger.info(f"Injected ADB key into {container}")
-
-        # Disconnect phantom emulator devices
-        _run("adb disconnect emulator-5554 2>/dev/null", timeout=5)
-        _run("adb disconnect emulator-5556 2>/dev/null", timeout=5)
 
         # Wait for ADB
         await self._wait_for_adb(dev)
 
         dev.state = "ready"
         self._save_state()
-        logger.info(f"Device {dev_id} ready on {dev.adb_target}")
+        logger.info(f"Device {dev_id} ready on {dev.adb_target} (CVD instance {instance_num})")
         return dev
 
-    async def _wait_for_adb(self, dev: DeviceInstance, timeout: int = 90):
-        """Poll until ADB connects and device boots."""
+    async def _wait_for_adb(self, dev: DeviceInstance, timeout: int = 120):
+        """Poll until ADB connects and Cuttlefish VM boots."""
         target = dev.adb_target
         start = time.time()
 
-        # Connect ADB
+        # Connect ADB — Cuttlefish exposes ADB on 0.0.0.0:<port>
         while time.time() - start < timeout:
             r = _adb(target, "connect " + target)
-            if "connected" in r.get("stdout", "").lower() or "already" in r.get("stdout", "").lower():
+            stdout = r.get("stdout", "").lower()
+            if "connected" in stdout or "already" in stdout:
                 break
-            await asyncio.sleep(2)
+            await asyncio.sleep(3)
 
         # Wait for boot_completed
         while time.time() - start < timeout:
@@ -283,10 +336,23 @@ class DeviceManager:
 
         logger.info(f"Destroying device {device_id}")
 
-        # Stop and remove container
-        _run(f"docker rm -f {dev.container}", timeout=30)
+        # Stop Cuttlefish VM
+        stop_cvd = CVD_BIN_DIR / "stop_cvd"
+        if not stop_cvd.exists():
+            stop_cvd = Path(shutil.which("stop_cvd") or "stop_cvd")
+        cvd_home = dev.cvd_home or str(CVD_HOME_BASE / device_id)
+        _run(f"{stop_cvd} --base_instance_num={dev.instance_num}",
+             timeout=30, env={"HOME": cvd_home})
 
-        # Remove data volume
+        # Disconnect ADB
+        _run(f"adb disconnect {dev.adb_target}", timeout=5)
+
+        # Remove instance home directory
+        cvd_path = Path(cvd_home)
+        if cvd_path.exists():
+            shutil.rmtree(cvd_path, ignore_errors=True)
+
+        # Remove device data
         data_dir = DEVICES_DIR / device_id
         if data_dir.exists():
             shutil.rmtree(data_dir, ignore_errors=True)
@@ -300,7 +366,34 @@ class DeviceManager:
         if not dev:
             return False
 
-        _run(f"docker restart {dev.container}", timeout=60)
+        # Restart Cuttlefish: stop then re-launch with same config
+        stop_cvd = CVD_BIN_DIR / "stop_cvd"
+        if not stop_cvd.exists():
+            stop_cvd = Path(shutil.which("stop_cvd") or "stop_cvd")
+        cvd_home = dev.cvd_home or str(CVD_HOME_BASE / device_id)
+        _run(f"{stop_cvd} --base_instance_num={dev.instance_num}",
+             timeout=30, env={"HOME": cvd_home})
+
+        await asyncio.sleep(2)
+
+        # Re-launch with existing config
+        config_path = Path(cvd_home) / "cvd_config.json"
+        launch_cvd = CVD_BIN_DIR / "launch_cvd"
+        if not launch_cvd.exists():
+            launch_cvd = Path(shutil.which("launch_cvd") or "launch_cvd")
+
+        cvd_cmd = (
+            f"{launch_cvd} "
+            f"--config_file={config_path} "
+            f"--base_instance_num={dev.instance_num} "
+            f"--daemon "
+            f"--report_anonymous_usage_stats=n "
+        )
+        if CVD_IMAGES_DIR.exists() and (CVD_IMAGES_DIR / "system.img").exists():
+            cvd_cmd += f"--system_image_dir={CVD_IMAGES_DIR} "
+
+        _run(cvd_cmd, timeout=180, env={"HOME": cvd_home})
+
         dev.state = "booting"
         self._save_state()
 
@@ -312,12 +405,14 @@ class DeviceManager:
     def get_device_info(self, device_id: str) -> Optional[Dict[str, Any]]:
         """Get live device info via ADB."""
         dev = self._devices.get(device_id)
-        if not dev or dev.state != "ready":
+        if not dev or dev.state not in ("ready", "patched", "running"):
             return None
 
         t = dev.adb_target
         return {
             "id": dev.id,
+            "device_type": dev.device_type,
+            "instance_num": dev.instance_num,
             "model": _adb_shell(t, "getprop ro.product.model"),
             "brand": _adb_shell(t, "getprop ro.product.brand"),
             "android": _adb_shell(t, "getprop ro.build.version.release"),

@@ -1,16 +1,15 @@
-"""
-Titan V11.3 — Device Aging Workflow Engine
-============================================
+"""Titan V11.3 — Device Aging Workflow Engine (Cuttlefish)
+========================================================
 High-level orchestrator that chains multiple operations into a complete
 device aging pipeline driven by user inputs.
 
 Workflow stages:
   1. Forge Genesis profile (contacts, SMS, call logs, Chrome data)
   2. Inject profile into device
-  3. Patch device for stealth
+  3. Patch device for stealth (Cuttlefish artifact masking)
   4. Install app bundles via AI agent
   5. Sign into apps via AI agent (using persona credentials)
-  6. Set up wallet (data injection or AI agent)
+  6. Set up wallet (data injection via ADB)
   7. Run warmup browsing/YouTube sessions
   8. Generate verification report
 
@@ -20,7 +19,7 @@ based on the app/task type.
 Usage:
     engine = WorkflowEngine(device_manager=dm)
     job = await engine.start_workflow(
-        device_id="vmos-oneplus-ace3",
+        device_id="dev-abc123",
         persona={"name": "James Mitchell", "email": "jm@gmail.com", ...},
         bundles=["us_banking", "social"],
         card_data={"number": "4532...", "exp_month": 12, ...},
@@ -282,19 +281,25 @@ class WorkflowEngine:
         raise RuntimeError("Inject timed out after 10 minutes")
 
     async def _stage_patch(self, job: WorkflowJob, country: str):
-        """Stage: Apply stealth patches."""
-        import urllib.request
-        api = f"http://127.0.0.1:{os.environ.get('TITAN_API_PORT', '8080')}"
-        body = json.dumps({"carrier": "att_us", "location": "la"}).encode()
-        req = urllib.request.Request(
-            f"{api}/api/vmos/{job.device_id}/patch",
-            data=body, headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode())
-            score = data.get("score", 0)
-            logger.info(f"Patch complete: score={score}")
+        """Stage: Apply stealth patches via AnomalyPatcher."""
+        dev = self.dm.get_device(job.device_id) if self.dm else None
+        if not dev:
+            raise RuntimeError(f"Device {job.device_id} not found")
+
+        from anomaly_patcher import AnomalyPatcher
+        from device_presets import COUNTRY_DEFAULTS
+
+        defaults = COUNTRY_DEFAULTS.get(country, COUNTRY_DEFAULTS.get("US", {}))
+        carrier = defaults.get("carrier", "att_us")
+        location = defaults.get("location", "la")
+        model = dev.config.get("model", "samsung_s25_ultra")
+
+        patcher = AnomalyPatcher(adb_target=dev.adb_target)
+        report = patcher.full_patch(model, carrier, location)
+        dev.patch_result = report.to_dict()
+        dev.stealth_score = report.score
+        dev.state = "patched"
+        logger.info(f"Patch complete: score={report.score}")
 
     async def _stage_install_apps(self, job: WorkflowJob, bundles: List[str]):
         """Stage: Install apps via AI agent."""
@@ -340,26 +345,28 @@ class WorkflowEngine:
                 continue
 
     async def _stage_wallet(self, job: WorkflowJob, card_data: Dict):
-        """Stage: Set up wallet via data injection."""
+        """Stage: Set up wallet via ADB data injection."""
         if not card_data.get("number"):
             logger.info("No card data — skipping wallet stage")
             return
 
         dev = self.dm.get_device(job.device_id) if self.dm else None
-        if not dev or not dev.vmos_pad_code:
-            return
+        if not dev:
+            raise RuntimeError(f"Device {job.device_id} not found")
 
-        from vmos_cloud_bridge import VMOSCloudBridge
-        bridge = VMOSCloudBridge()
-        ok = await bridge._inject_wallet_db(
-            dev.vmos_pad_code,
-            card_last4=str(card_data["number"])[-4:],
-            card_holder=card_data.get("cardholder", ""),
-            issuer="Visa",
+        from wallet_provisioner import WalletProvisioner
+        prov = WalletProvisioner(adb_target=dev.adb_target)
+        result = prov.provision_card(
+            card_number=card_data["number"],
+            exp_month=card_data.get("exp_month", 12),
+            exp_year=card_data.get("exp_year", 2027),
+            cardholder=card_data.get("cardholder", ""),
+            cvv=card_data.get("cvv", ""),
+            persona_email=job.config.get("persona", {}).get("email", ""),
         )
-        if not ok:
-            raise RuntimeError("Wallet injection failed")
-        logger.info("Wallet DB injected successfully")
+        if not result.success:
+            raise RuntimeError(f"Wallet injection failed: {result.error}")
+        logger.info(f"Wallet provisioned: {result.card_network} ...{result.last4}")
 
     async def _stage_warmup(self, job: WorkflowJob, warmup_type: str,
                             aging: Dict):

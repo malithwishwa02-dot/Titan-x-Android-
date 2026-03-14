@@ -1,7 +1,7 @@
 """
 Titan V11.3 — Android Device Profile Forge
 Generates complete, persona-consistent Android device profile data
-for injection into Redroid containers via ProfileInjector.
+for injection into Cuttlefish Android VMs via ProfileInjector.
 
 Unlike the V11 genesis_core (browser-only), this forges the FULL device:
   - Contacts (persona-tied names + locale-matched phone numbers)

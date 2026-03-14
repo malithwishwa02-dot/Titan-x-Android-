@@ -1,49 +1,35 @@
 version: "3.8"
 # ═══════════════════════════════════════════════════════════════════
-# Titan Cloud Phone — All-in-One Production Deployment
+# Titan Cloud Phone — Production Deployment (Cuttlefish Backend)
 # Deploy with: docker-compose -f docker-compose.prod.yml up -d
+#
+# NOTE: Android devices run as Cuttlefish KVM VMs managed by the
+# Titan API via launch_cvd/stop_cvd — NOT as Docker containers.
+# Only the API server, ws-scrcpy, and nginx run in Docker.
 #
 # Access:
 #   https://your-server/            → Titan Console
-#   https://your-server/scrcpy/     → H264 Cloud Phone (VMOS-like)
+#   https://your-server/scrcpy/     → H264 Cloud Phone
 #   https://your-server/mobile#ID   → Mobile viewer + AI agent
 #   https://your-server/api/        → REST API
 #
 # Requirements:
-#   - Linux host with Docker
-#   - binder_linux kernel module (for Redroid)
-#   - 4+ CPU cores, 8+ GB RAM, 20+ GB disk
+#   - Linux host with KVM support (/dev/kvm)
+#   - Cuttlefish host tools installed (launch_cvd, stop_cvd)
+#   - Kernel modules: vhost_vsock, vhost_net, v4l2loopback
+#   - 8+ CPU cores, 16+ GB RAM, 40+ GB disk
 # ═══════════════════════════════════════════════════════════════════
 
 services:
-  # ─── ANDROID DEVICE (Redroid) ──────────────────────────────────
-  android:
-    image: redroid/redroid:14.0.0-latest
-    container_name: titan-android
-    privileged: true
-    restart: unless-stopped
-    ports:
-      - "5555:5555"
-    volumes:
-      - android-data:/data
-    command:
-      - androidboot.redroid_gpu_mode=guest
-      - androidboot.redroid_width=1080
-      - androidboot.redroid_height=2400
-      - androidboot.redroid_fps=30
-      - androidboot.redroid_dpi=420
-    deploy:
-      resources:
-        limits:
-          memory: 3g
-          cpus: "2.0"
-
   # ─── TITAN API SERVER ─────────────────────────────────────────
+  # Manages Cuttlefish VMs on the host via launch_cvd/stop_cvd.
+  # Requires host network + ADB access to communicate with VMs.
   titan-api:
     image: python:3.12-slim
     container_name: titan-api
     restart: unless-stopped
     working_dir: /opt/titan
+    network_mode: host
     ports:
       - "8080:8080"
     volumes:
@@ -51,24 +37,22 @@ services:
       - ../server:/opt/titan/server:ro
       - ../console:/opt/titan/console:ro
       - titan-data:/opt/titan/data
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /usr/bin/docker:/usr/bin/docker
+      - /opt/titan/cuttlefish:/opt/titan/cuttlefish
+      - /opt/android-cuttlefish:/opt/android-cuttlefish:ro
       - /usr/bin/adb:/usr/bin/adb
       - /root/.android:/root/.android
     environment:
       - PYTHONPATH=/opt/titan/server:/opt/titan/core
       - TITAN_DATA=/opt/titan/data
-      - TITAN_GPU_OLLAMA=${TITAN_GPU_OLLAMA:-http://host.docker.internal:11435}
-      - VMOS_API_KEY=${VMOS_API_KEY:-}
-      - VMOS_API_SECRET=${VMOS_API_SECRET:-}
-      - VMOS_API_HOST=${VMOS_API_HOST:-api.vmoscloud.com}
+      - CVD_BIN_DIR=${CVD_BIN_DIR:-/opt/android-cuttlefish/bin}
+      - CVD_IMAGES_DIR=${CVD_IMAGES_DIR:-/opt/titan/cuttlefish/images}
+      - CVD_HOME_BASE=${CVD_HOME_BASE:-/opt/titan/cuttlefish}
+      - TITAN_GPU_OLLAMA=${TITAN_GPU_OLLAMA:-http://127.0.0.1:11435}
     command: >
       bash -c "
         pip install -q fastapi uvicorn pydantic pillow 2>/dev/null &&
         python3 -m uvicorn server.titan_api:app --host 0.0.0.0 --port 8080 --workers 1
       "
-    depends_on:
-      - android
 
   # ─── WS-SCRCPY (H264 Cloud Phone) ─────────────────────────────
   ws-scrcpy:
@@ -79,8 +63,6 @@ services:
     volumes:
       - /usr/bin/adb:/usr/bin/adb
       - /root/.android:/root/.android
-    depends_on:
-      - android
 
   # ─── NGINX (SSL + Routing) ─────────────────────────────────────
   nginx:
@@ -96,5 +78,4 @@ services:
       - ws-scrcpy
 
 volumes:
-  android-data:
   titan-data:

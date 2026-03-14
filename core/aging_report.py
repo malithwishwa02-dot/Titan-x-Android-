@@ -6,8 +6,8 @@ combining trust score, patch results, app installation status,
 wallet state, injection results, and agent task history.
 
 Usage:
-    reporter = AgingReporter(bridge, device_manager)
-    report = await reporter.generate(device_id="vmos-oneplus-ace3")
+    reporter = AgingReporter(device_manager=dm)
+    report = await reporter.generate(device_id="dev-abc123")
     # Returns full JSON report with all checks
 """
 
@@ -60,14 +60,8 @@ class AgingReporter:
     """Generates comprehensive aging reports for devices."""
 
     def __init__(self, bridge=None, device_manager=None):
-        self._bridge = bridge
+        self._bridge = bridge  # legacy — unused for Cuttlefish
         self.dm = device_manager
-
-    def _get_bridge(self):
-        if self._bridge is None:
-            from vmos_cloud_bridge import VMOSCloudBridge
-            self._bridge = VMOSCloudBridge()
-        return self._bridge
 
     async def generate(self, device_id: str) -> AgingReport:
         """Generate a full aging report for a device."""
@@ -77,7 +71,7 @@ class AgingReporter:
         )
 
         dev = self.dm.get_device(device_id) if self.dm else None
-        pad_code = dev.vmos_pad_code if dev else ""
+        adb_target = dev.adb_target if dev else "127.0.0.1:6520"
 
         # 1. Load persona from profile
         report.persona, report.profile_id, report.profile_age_days = (
@@ -91,9 +85,9 @@ class AgingReporter:
         report.patch_score = await self._get_patch_score(device_id)
 
         # 4. Task verification
-        if pad_code:
+        if dev:
             from task_verifier import TaskVerifier
-            verifier = TaskVerifier(bridge=self._get_bridge(), pad_code=pad_code)
+            verifier = TaskVerifier(adb_target=adb_target)
 
             # Check expected apps
             expected_apps = self._get_expected_apps(device_id)
@@ -183,7 +177,7 @@ class AgingReporter:
         try:
             import urllib.request
             api_port = os.environ.get("TITAN_API_PORT", "8080")
-            url = f"http://127.0.0.1:{api_port}/api/vmos/{device_id}/patch-status"
+            url = f"http://127.0.0.1:{api_port}/api/stealth/{device_id}/patch-status"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode())

@@ -384,7 +384,7 @@ PERSONAS = [
 ]
 
 DEVICE_IDS = ["dev-us1", "vmos-oneplus-ace3", "vmos-samsung-s24"]
-DEVICE_TYPES = {"dev-us1": "redroid", "vmos-oneplus-ace3": "vmos_cloud", "vmos-samsung-s24": "vmos_cloud"}
+DEVICE_TYPES = {"dev-us1": "cuttlefish", "vmos-oneplus-ace3": "cuttlefish", "vmos-samsung-s24": "cuttlefish"}
 
 APP_PACKAGES = {
     "Instagram": "com.instagram.android",
@@ -447,7 +447,7 @@ def generate_trajectory(template_name: str, template_def: dict, persona: dict,
         prompt_text = template_def["prompt"]
 
     category = template_def.get("category", "general")
-    device_type = DEVICE_TYPES.get(device_id, "redroid")
+    device_type = DEVICE_TYPES.get(device_id, "cuttlefish")
 
     # Get action sequence
     seq_key = TEMPLATE_TO_SEQUENCE.get(template_name, "warmup_browse")

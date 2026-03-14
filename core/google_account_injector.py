@@ -1,6 +1,6 @@
 """
 Titan V11.3 — Google Account Injector
-Injects a Google account into a Redroid device so all Google apps appear logged in.
+Injects a Google account into a Cuttlefish Android VM so all Google apps appear logged in.
 
 Injection targets:
   - /data/system_ce/0/accounts_ce.db   — Credential-encrypted account store (Android 7+)
@@ -118,7 +118,7 @@ class AccountInjectionResult:
 # ═══════════════════════════════════════════════════════════════════════
 
 class GoogleAccountInjector:
-    """Injects a Google account into a Redroid device for pre-logged-in state."""
+    """Injects a Google account into a Cuttlefish Android VM for pre-logged-in state."""
 
     ACCOUNTS_CE_PATH = "/data/system_ce/0/accounts_ce.db"
     ACCOUNTS_DE_PATH = "/data/system_de/0/accounts_de.db"
@@ -251,7 +251,7 @@ class GoogleAccountInjector:
             if row:
                 account_id = row[0]
             else:
-                # Detect schema — Redroid 14 uses different columns than stock Android
+                # Detect schema — Android 14 uses different columns than older versions
                 cols = [r[1] for r in c.execute("PRAGMA table_info(accounts)").fetchall()]
                 if "last_password_entry_time_millis_epoch" in cols:
                     c.execute(

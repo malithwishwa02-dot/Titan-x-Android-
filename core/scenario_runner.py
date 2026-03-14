@@ -147,7 +147,7 @@ SCENARIO_PRESETS = {
             {"template": "chrome_signin", "params": {"email": "{email}", "password": "{password}"}},
             {"template": "instagram_signin", "params": {"email": "{email}", "password": "{password}"}},
             {"template": "paypal_signin", "params": {"email": "{email}", "password": "{password}"}},
-            {"template": "wallet_add_card", "params": {"card_number": "{card_number}", "card_exp": "{card_exp}", "card_cvv": "{card_cvv}", "card_name": "{card_name}"}},
+            {"template": "wallet_verify", "params": {"card_last4": "{card_last4}"}},
             {"template": "search_google", "params": {"query": "best coffee shops near me"}},
             {"template": "warmup_device", "params": {}},
             {"template": "warmup_youtube", "params": {"query": "music mix 2026"}},
@@ -181,11 +181,12 @@ SCENARIO_PRESETS = {
         "max_steps": 30,
     },
     "wallet_setup": {
-        "description": "Add payment cards to Google Pay and Samsung Pay",
+        "description": "Add payment cards via UI flows and verify wallet",
         "mixed": True,
         "tasks": [
-            {"template": "wallet_add_card", "params": {"card_number": "{card_number}", "card_exp": "{card_exp}", "card_cvv": "{card_cvv}", "card_name": "{card_name}"}},
-            {"template": "wallet_samsung_pay", "params": {"card_number": "{card_number}", "card_exp": "{card_exp}", "card_cvv": "{card_cvv}"}},
+            {"template": "wallet_add_card_ui", "params": {}},
+            {"template": "play_store_add_payment", "params": {}},
+            {"template": "wallet_verify", "params": {"card_last4": "{card_last4}"}},
         ],
         "max_steps": 30,
     },
@@ -401,17 +402,6 @@ class ScenarioRunner:
             return None
 
         from device_agent import DeviceAgent
-        if dev.device_type == "vmos_cloud" and dev.vmos_pad_code:
-            try:
-                from vmos_cloud_bridge import VMOSCloudBridge
-                bridge = VMOSCloudBridge()
-                from vmos_agent_adapter import VMOSScreenAdapter, VMOSTouchAdapter
-                agent = DeviceAgent(adb_target=dev.adb_target or "vmos-api")
-                agent.analyzer = VMOSScreenAdapter(bridge=bridge, pad_code=dev.vmos_pad_code)
-                agent.touch = VMOSTouchAdapter(bridge=bridge, pad_code=dev.vmos_pad_code)
-                return agent
-            except Exception:
-                pass
         return DeviceAgent(adb_target=dev.adb_target)
 
     def get_batch(self, batch_id: str) -> Optional[ScenarioBatch]:

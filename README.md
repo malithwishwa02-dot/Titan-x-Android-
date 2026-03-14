@@ -1,8 +1,13 @@
-# Titan V11.3 — Advanced Android Cloud Device Platform
+# Titan V11.3 — Advanced Android Cloud Device Platform (Cuttlefish)
 
 **Advanced Orchestration of High-Fidelity Mobile Virtualization: Deploying Undetectable Android Environments on Hostinger KVM Infrastructure**
 
-The evolution of mobile device virtualization has progressed from primitive emulated environments used primarily for application development to sophisticated, cloud-resident architectures capable of achieving functional parity with physical hardware. To deploy a cloud-based mobile device that operates indistinguishably from a regular handset, engineers must navigate a complex intersection of kernel-level configuration, hardware identity simulation, and behavioral pattern synthesis. The realization of a "perfect" mobile environment on Hostinger infrastructure requires an integrated stack — exemplified by the Titan V11.3 platform — that leverages the Kernel-based Virtual Machine (KVM) substrate to host high-performance Redroid (Android in Docker) containers. This document provides an exhaustive technical analysis of the deployment methodologies, stealth vectors, and performance optimizations required to maintain a fleet of undetectable cloud devices in the 2026 threat landscape.
+The evolution of mobile device virtualization has progressed from primitive emulated environments used primarily for application development to sophisticated, cloud-resident architectures capable of achieving functional parity with physical hardware. To deploy a cloud-based mobile device that operates indistinguishably from a regular handset, engineers must navigate a complex intersection of kernel-level configuration, hardware identity simulation, and behavioral pattern synthesis. The realization of a "perfect" mobile environment on Hostinger infrastructure requires an integrated stack — exemplified by the Titan V11.3 platform — that leverages the Kernel-based Virtual Machine (KVM) substrate to host high-performance Cuttlefish Android virtual machines. This document provides an exhaustive technical analysis of the deployment methodologies, stealth vectors, and performance optimizations required to maintain a fleet of undetectable cloud devices in the 2026 threat landscape.
+
+> **Migration Note (V11.3.2):** The platform has migrated from Redroid (Android-in-Docker)
+> to Cuttlefish (KVM-based Android VMs) for improved hardware fidelity, native ARM translation
+> via libndk_translation, and deeper control over boot-time identity baking. VMOS Cloud
+> integration has been deprecated.
 
 ---
 
@@ -11,7 +16,7 @@ The evolution of mobile device virtualization has progressed from primitive emul
 - [Infrastructure Architecture](#infrastructure-architecture-and-hostinger-kvm-optimization)
 - [System Orchestration and API Design](#system-orchestration-and-api-design)
 - [Operating System and Kernel Preparation](#operating-system-and-kernel-preparation)
-- [Redroid Container Configuration](#redroid-container-configuration-and-deployment)
+- [Cuttlefish VM Configuration](#cuttlefish-vm-configuration-and-deployment)
 - [Anomaly Suppression and Stealth](#high-fidelity-anomaly-suppression-and-stealth-vectors)
 - [Genesis Profile Forge](#genesis-profile-forge-and-behavioral-stealth)
 - [Deepfake Camera Injection](#real-time-multimedia-and-deepfake-camera-injection)
@@ -72,7 +77,7 @@ The Titan API serves as the centralized nervous system for the mobile fleet, exp
 | `/api/dashboard` | Fleet Overview | Device stats and average stealth scores |
 | `/api/settings` | Configuration | Persistent system settings |
 
-The `DeviceManager` singleton within the server logic maintains the state of all active containers, persisting device data in a structured directory at `/opt/titan/data/devices`. Each device is assigned a unique ADB port, starting from a base port of 5555, allowing for granular control and debugging of each mobile instance through standard Android tools.
+The `DeviceManager` singleton within the server logic maintains the state of all active Cuttlefish VMs, persisting device data in a structured directory at `/opt/titan/data/devices`. Each device is assigned a unique ADB port, starting from a base port of 6520 (Cuttlefish default), allowing for granular control and debugging of each mobile instance through standard Android tools.
 
 ### Web Console and Remote Interface
 
@@ -82,9 +87,9 @@ The frontend console is implemented as a Single Page Application (SPA) using Alp
 Web Console (any browser)
     |  HTTPS :443
     v
-Nginx --> Titan API (FastAPI :8080) --> Redroid Containers (Android 14/15)
+Nginx --> Titan API (FastAPI :8080) --> Cuttlefish VMs (Android 14/15 via KVM)
            |-- /api/devices/*       Device CRUD, streaming, screenshots
-           |-- /api/stealth/*       53+ vector anomaly patcher
+           |-- /api/stealth/*       65+ vector anomaly patcher
            |-- /api/genesis/*       Profile forge + device injection
            |-- /api/intel/*         AI copilot, 3DS, recon, dark web
            |-- /api/network/*       VPN, shield, forensic, proxy
@@ -115,35 +120,34 @@ In cases where `ashmem_linux` is unavailable — a common occurrence in newer ke
 
 ---
 
-## Redroid Container Configuration and Deployment
+## Cuttlefish VM Configuration and Deployment
 
-The mobile device environment itself is realized through Redroid, a GPU-accelerated "Android In Cloud" (AIC) solution that allows multiple Android instances to run as isolated containers. For a cloud device to function "perfectly," the container must be launched with specific parameters that align its virtual hardware with the simulated device model.
+The mobile device environment is realized through Google Cuttlefish, a KVM-based Android Virtual Device (AVD) framework that runs full Android system images under hardware virtualization. Unlike Docker-based solutions (Redroid), Cuttlefish provides a complete virtual machine with its own kernel, hardware abstraction layer, and native ARM translation — achieving near-native performance with deeper hardware fidelity.
 
-### Advanced Launch Parameters and Network Tuning
+### Cuttlefish Launch Architecture
 
-When creating a new device instance, the `DeviceManager` executes a complex `docker run` command that defines the display resolution, pixel density, and frame rate of the virtual handset. These values must be consistent with the hardware presets to avoid detection by apps that check for display anomalies.
+When creating a new device instance, the `DeviceManager` generates a per-instance JSON config and invokes `launch_cvd` with device identity properties baked into `extra_bootconfig_args`. This means `ro.product.*` and `ro.build.*` properties are set at VM boot time, not via runtime `setprop` — matching how real devices operate.
 
 | Parameter | Value (Samsung S25 Ultra) | Purpose |
 |---|---|---|
-| `redroid_width` | 1440 | Real hardware display width |
-| `redroid_height` | 3120 | Real hardware display height |
-| `redroid_dpi` | 600 | Correct scaling for high-resolution apps |
-| `redroid_fps` | 60 | Standard mobile refresh rate |
-| `redroid_gpu_mode` | guest | Software rendering for VPS environments |
+| `memory_mb` | 4096 | RAM allocation per VM |
+| `cpus` | 4 | vCPU count per VM |
+| `width` | 1080 | Real hardware display width |
+| `height` | 2400 | Real hardware display height |
+| `dpi` | 420 | Correct scaling for high-resolution apps |
+| `extra_bootconfig_args` | (identity props) | Device fingerprint, model, brand baked at boot |
 
-Network identity is further hardened by specifying DNS servers (e.g., `8.8.8.8`) and ensuring the container uses host networking or a bridged network that allows for seamless ADB connectivity. The transformation of the network interface from `eth0` to `wlan0` inside the container is a critical stealth step, as physical mobile devices do not typically present an Ethernet interface.
+Network identity is hardened by the anomaly patcher which renames `eth0` to `wlan0` inside the VM. Cuttlefish VMs use `vsock` for host communication and expose ADB over TCP on sequential ports starting from 6520.
 
 ### Integration of GMS and ARM Translation
 
-Standard Redroid images are "vanilla" Android builds that lack Google Mobile Services (GMS) and the ability to run ARM-based applications on an x86_64 host. The Titan platform utilizes a custom Dockerfile to layer these essential components onto the base image. The GMS integration uses MindTheGapps for Android 14, providing the Play Store, Play Services, and Google Services Framework.
-
-To solve the architecture mismatch, the image incorporates `libndk_translation`, a native bridge that allows ARM-only applications — particularly prevalent in the banking and fintech sectors — to run on the x86 host without significant performance degradation. This translation layer is critical for achieving "perfect" application compatibility, as many high-security apps do not offer x86_64 versions.
+Cuttlefish images are built from AOSP sources and can include Google Mobile Services (GMS) via MindTheGapps overlay. The `libndk_translation` native bridge is pre-installed in the system image, allowing ARM-only banking and fintech APKs to run on x86_64 hosts without performance degradation.
 
 ---
 
 ## High-Fidelity Anomaly Suppression and Stealth Vectors
 
-For a cloud device to be used effectively, it must bypass the 53+ detection vectors commonly employed by modern fraud detection and RASP systems. The Titan Anomaly Patcher implements a multi-phase suppression strategy that masks the virtualization artifacts of the Redroid container.
+For a cloud device to be used effectively, it must bypass the 65+ detection vectors commonly employed by modern fraud detection and RASP systems. The Titan Anomaly Patcher implements a multi-phase suppression strategy that masks the virtualization artifacts of the Cuttlefish VM (vsock, virtio, cutf_cvm).
 
 ### Phase 1: Comprehensive Identity Forging
 
@@ -159,7 +163,7 @@ The `gsm.sim.state` is set to `"READY"`, and the network type is forced to `"LTE
 
 ### Phase 3-5: Anti-Emulator and RASP Evasion
 
-Advanced detection engines look for specific artifacts associated with the QEMU emulator or the Goldfish kernel used by Android emulators. The patcher mitigates these by setting `ro.kernel.qemu` and `ro.hardware.virtual` to `"0"`. It also employs bind-mounts to hide sensitive files; for instance, it bind-mounts `/dev/null` over `/proc/cmdline`, which often contains the `androidboot.hardware=redroid` string that would immediately reveal the device's virtual nature.
+Advanced detection engines look for specific artifacts associated with the QEMU emulator, Goldfish kernel, or Cuttlefish virtual SoC. The patcher mitigates these by setting `ro.kernel.qemu` and `ro.hardware.virtual` to `"0"`. It strips Cuttlefish/vsoc/virtio tokens from `/proc/cmdline`, masks Virtio PCI vendor IDs, and hides vsock/hvc device nodes that would reveal the device's virtual nature.
 
 To evade RASP systems, the patcher hides the presence of the `su` binary and any Magisk or Frida artifacts. It changes the permissions of `su` to `000` and uses `iptables` to block the default communication ports for the Frida instrumentation framework (27042 and 27043). Furthermore, it disables developer options and USB debugging via the Android settings database to mimic a consumer-configured device.
 
@@ -185,7 +189,7 @@ GPU identity is also masked by overriding the OpenGL ES renderer and vendor stri
 
 - **Device Identity**: Fingerprint, model, IMEI, serial, MAC, DRM ID
 - **SIM/Telephony**: Carrier, MCC/MNC, SIM READY state, cell towers
-- **Anti-Emulator**: No qemu/goldfish/Docker/cgroup traces
+- **Anti-Emulator**: No qemu/goldfish/cuttlefish/vsoc/virtio/cgroup traces
 - **Build Verification**: Locked bootloader, verified boot green, SELinux
 - **Root/RASP**: su hidden, Magisk hidden, Frida blocked, ADB disabled
 - **Location**: GPS + timezone + locale + WiFi SSID consistent
@@ -247,11 +251,11 @@ POST /api/genesis/smartforge          --> AI-powered persona-driven forge
 
 ## Real-Time Multimedia and Deepfake Camera Injection
 
-A sophisticated cloud device must be able to handle real-time multimedia interactions, such as those required for biometric identity verification. The Titan CameraBridge architecture facilitates the injection of deepfake video into Redroid containers via the `v4l2loopback` kernel module.
+A sophisticated cloud device must be able to handle real-time multimedia interactions, such as those required for biometric identity verification. The Titan CameraBridge architecture facilitates the injection of deepfake video into Cuttlefish VMs via the `v4l2loopback` kernel module.
 
 ### Architecture of the Camera Bridge
 
-The bridge functions by creating virtual video nodes on the host system, which are then mounted into the Redroid container as hardware cameras. FFmpeg is used to encode and stream video data into these nodes. The system supports three operational modes:
+The bridge functions by creating virtual video nodes on the host system, which are passed through to the Cuttlefish VM via virtio device passthrough. FFmpeg is used to encode and stream video data into these nodes. The system supports three operational modes:
 
 1. **Static Injection**: Takes a single face image and applies subtle micro-movements — blinking, breathing, and minor head shifts — to create a video loop that appears alive to liveness detection algorithms.
 2. **Preview Mode**: Streams a pre-generated deepfake video file into the virtual camera, allowing for precise control over the visual response during a KYC flow.
@@ -352,9 +356,8 @@ https://YOUR_VPS_IP/
 ### After VPS Reboot
 ```bash
 systemctl start titan-v11-api
-docker start titan-dev-us1 ws-scrcpy titan-nginx
-sleep 40  # wait for Android boot
-adb connect 127.0.0.1:5555
+docker start titan-scrcpy titan-nginx
+# Cuttlefish VMs are managed by the API — create via POST /api/devices
 ```
 
 ---
@@ -368,9 +371,9 @@ titan-v11.3-device/
 |   |-- mobile.html             PWA mobile device view + AI agent
 |   '-- manifest.json           PWA manifest
 |-- core/                        Core Python modules
-|   |-- device_manager.py       Redroid container management (DeviceManager singleton)
+|   |-- device_manager.py       Cuttlefish VM management (DeviceManager via launch_cvd)
 |   |-- device_presets.py       20+ device identities (Samsung, Pixel, OnePlus, etc.)
-|   |-- anomaly_patcher.py      53+ detection vector patcher (11 phases)
+|   |-- anomaly_patcher.py      65+ detection vector patcher (19 phases)
 |   |-- android_profile_forge.py Genesis profile forge (circadian-weighted)
 |   |-- profile_injector.py     ADB injection (cookies, history, contacts, SMS, gallery)
 |   |-- wallet_provisioner.py   Google Pay + Play Store + Chrome autofill CC injection
@@ -394,13 +397,17 @@ titan-v11.3-device/
 |       |-- ai.py               /api/ai/*
 |       |-- dashboard.py        /api/dashboard/*
 |       '-- settings.py         /api/settings/*
-|-- docker/                      Docker configuration
+|-- cuttlefish/                  Cuttlefish VM configuration
+|   |-- init.d/99-titan-patch.sh  Boot patch script for Cuttlefish VMs
+|   '-- launch_config_template.json  Default CVD launch config
+|-- docker/                      Docker configuration (API + supporting services)
 |   |-- Dockerfile.titan-api    API server image
-|   |-- Dockerfile.redroid-gms  Custom Redroid with GMS + ARM translation
-|   |-- docker-compose.yml      Full stack compose
+|   |-- Dockerfile.redroid-gms  [DEPRECATED] Old Redroid image
+|   |-- docker-compose.prod.yml Production compose (API + scrcpy + nginx)
 |   |-- nginx.conf              Reverse proxy (SSL + WebSocket)
-|   '-- init.d/                 Boot patch scripts for containers
+|   '-- init.d/                 [DEPRECATED] Old Redroid boot scripts
 |-- scripts/                     Deployment and utility scripts
+|   |-- setup_cuttlefish.sh     Cuttlefish host setup (KVM, modules, tools)
 |   |-- deploy_titan_v11.3.sh   Full VPS deployment (8 phases)
 |   |-- format_vps.py           Hostinger API VPS reformatter
 |   |-- forensic_verify.py      Deep device verification (32 checks)
@@ -414,7 +421,9 @@ titan-v11.3-device/
 
 - **Infrastructure**: Hostinger KVM 8 (8 CPU, 32GB RAM, 400GB NVMe)
 - **OS**: Ubuntu 24.04 LTS (kernel 6.8.0+)
-- **Devices**: 4-8 simultaneous Redroid instances (~3GB RAM each)
+- **KVM**: /dev/kvm required (hardware virtualization)
+- **Kernel Modules**: vhost_vsock, vhost_net, binder_linux, v4l2loopback
+- **Devices**: 4-8 simultaneous Cuttlefish VMs (~4GB RAM each)
 - **AI**: Local Ollama (CPU, qwen2.5:7b) + optional Vast.ai GPU tunnel
 - **Streaming**: ws-scrcpy for H264 cloud phone access
 
@@ -422,7 +431,7 @@ titan-v11.3-device/
 
 ## Conclusion
 
-The deployment of a cloud-resident mobile device on Hostinger that functions with hardware-level fidelity is an exercise in multi-disciplinary systems engineering. By combining the resource isolation of KVM with the flexibility of Redroid containers and the behavioral intelligence of the Titan V11.3 platform, it is possible to achieve a degree of stealth that bypasses the majority of modern detection systems. Success in this domain is not merely a matter of configuration but of continuous adaptation to the evolving mandates of Google Play Integrity and the rise of behavioral biometrics. The technical methodologies detailed in this document provide the framework for a resilient, high-performance mobile fleet that stands as a testament to the current limits of virtualization technology.
+The deployment of a cloud-resident mobile device on Hostinger that functions with hardware-level fidelity is an exercise in multi-disciplinary systems engineering. By combining the resource isolation of KVM with the hardware fidelity of Cuttlefish Android VMs and the behavioral intelligence of the Titan V11.3 platform, it is possible to achieve a degree of stealth that bypasses the majority of modern detection systems. Success in this domain is not merely a matter of configuration but of continuous adaptation to the evolving mandates of Google Play Integrity and the rise of behavioral biometrics. The technical methodologies detailed in this document provide the framework for a resilient, high-performance mobile fleet that stands as a testament to the current limits of virtualization technology.
 
 ---
 

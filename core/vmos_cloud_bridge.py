@@ -1,17 +1,15 @@
 """
-Titan V11.3 — VMOS Cloud API Bridge
+Titan V11.3 — VMOS Cloud API Bridge [DEPRECATED]
+==================================================
+DEPRECATED: This module is no longer used. The Titan platform has migrated
+from VMOS Cloud to Cuttlefish KVM-based Android VMs managed via launch_cvd.
+All device management is now handled by device_manager.py (Cuttlefish backend).
+
+This file is retained for reference only and will be removed in a future release.
+
+Original description:
 Wraps VMOS Cloud OpenAPI for managing cloud Android instances.
-Provides the same interface patterns as device_manager.py so Titan API
-can route commands through either Redroid (direct ADB) or VMOS Cloud.
-
 API Docs: https://cloud.vmoscloud.com/vmoscloud/doc/en/server/OpenAPI.html
-
-Usage:
-    bridge = VMOSCloudBridge(api_key="...", api_secret="...")
-    devices = await bridge.list_instances()
-    await bridge.update_device_props(pad_code, {...})
-    await bridge.inject_contacts(pad_code, [...])
-    result = await bridge.exec_shell(pad_code, "ls /data")
 """
 
 import asyncio

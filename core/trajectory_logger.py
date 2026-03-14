@@ -1,7 +1,7 @@
 """
 Titan V11.3 — Trajectory Logger
 ================================
-Records every See→Think→Act step from DeviceAgent and VMOSScreenAgent
+Records every See→Think→Act step from DeviceAgent
 as structured training data for LoRA fine-tuning.
 
 Storage layout:
@@ -73,7 +73,7 @@ class TrajectoryMetadata:
     """Metadata for a complete trajectory."""
     task_id: str = ""
     device_id: str = ""
-    device_type: str = ""          # redroid | vmos_cloud
+    device_type: str = ""          # cuttlefish
     prompt: str = ""
     model: str = ""
     persona: Dict[str, str] = field(default_factory=dict)

@@ -83,7 +83,7 @@ class DemoRecorder:
         meta = {
             "task_id": sid,
             "device_id": device_id,
-            "device_type": "vmos_cloud" if pad_code else "redroid",
+            "device_type": "cuttlefish",
             "prompt": prompt,
             "model": "human_demo",
             "persona": {},
@@ -182,14 +182,20 @@ class DemoRecorder:
     async def capture_screen_for_session(self, session_id: str) -> str:
         """Capture current device screen for the session. Returns b64."""
         session = self._sessions.get(session_id)
-        if not session or not session.pad_code:
+        if not session:
             return ""
 
         try:
-            from vmos_agent_adapter import VMOSScreenAdapter
-            adapter = VMOSScreenAdapter(pad_code=session.pad_code)
-            state = adapter.capture_and_analyze(use_ui_dump=False)
-            return state.screenshot_b64 or ""
+            import base64, subprocess
+            # Use ADB screencap for Cuttlefish VMs
+            adb_target = session.adb_target if hasattr(session, "adb_target") else "127.0.0.1:6520"
+            proc = subprocess.run(
+                ["adb", "-s", adb_target, "exec-out", "screencap", "-p"],
+                capture_output=True, timeout=10,
+            )
+            if proc.returncode == 0 and proc.stdout:
+                return base64.b64encode(proc.stdout).decode()
+            return ""
         except Exception as e:
             logger.warning(f"Screen capture failed: {e}")
             return ""

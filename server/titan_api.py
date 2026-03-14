@@ -34,7 +34,7 @@ logger = logging.getLogger("titan.api")
 # APP INIT
 # ═══════════════════════════════════════════════════════════════════════
 
-app = FastAPI(title="Titan V11.3 Antidetect Device Platform", version="11.3.1")
+app = FastAPI(title="Titan V11.3 Antidetect Device Platform (Cuttlefish)", version="11.3.2")
 
 CONSOLE_DIR = Path(__file__).parent.parent / "console"
 
@@ -63,15 +63,15 @@ dm = DeviceManager()
 # ─── Register Routers ─────────────────────────────────────────────────
 from routers import devices, stealth, genesis, agent, intel, network
 from routers import cerberus, targets, kyc, admin, dashboard, settings
-from routers import bundles, ai, ws, vmos, training
+from routers import bundles, ai, ws, training
 
 # Initialize routers that need the device manager
-for mod in [devices, stealth, genesis, agent, kyc, admin, dashboard, bundles, ws, vmos, ai, training]:
+for mod in [devices, stealth, genesis, agent, kyc, admin, dashboard, bundles, ws, ai, training]:
     mod.init(dm)
 
 # Include all routers
 for r in [devices, stealth, genesis, agent, intel, network, cerberus,
-          targets, kyc, admin, dashboard, settings, bundles, ai, ws, vmos, training]:
+          targets, kyc, admin, dashboard, settings, bundles, ai, ws, training]:
     app.include_router(r.router)
 
 

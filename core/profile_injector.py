@@ -1,6 +1,6 @@
 """
 Titan V11.3 — Profile-to-Device Injector
-Injects forged Genesis profiles directly into Redroid Android devices via ADB.
+Injects forged Genesis profiles directly into Cuttlefish Android VMs via ADB.
 
 Injection targets:
   - Chrome cookies → /data/data/com.android.chrome/app_chrome/Default/Cookies
@@ -118,7 +118,7 @@ class InjectionResult:
 # ═══════════════════════════════════════════════════════════════════════
 
 class ProfileInjector:
-    """Injects forged Genesis profiles into Redroid Android devices."""
+    """Injects forged Genesis profiles directly into Cuttlefish Android VMs via ADB."""
 
     CHROME_DATA = "/data/data/com.android.chrome/app_chrome/Default"
 
@@ -191,8 +191,12 @@ class ProfileInjector:
     # ─── ENSURE APP DATA DIRS ────────────────────────────────────────────
 
     def _ensure_app_dirs(self):
-        """Launch key apps briefly to create their data directories on a fresh device."""
+        """Create app data directories needed for injection.
+        On bare Android (no GMS), apps aren't installed so we skip launching
+        and just create directories directly via mkdir."""
         t = self.target
+
+        # Try launching installed apps to create proper data dirs
         packages_to_init = [
             ("com.android.chrome", "com.google.android.apps.chrome.Main"),
             ("com.google.android.gms", None),
@@ -201,11 +205,13 @@ class ProfileInjector:
         ]
         launched = []
         for pkg, activity in packages_to_init:
-            # Check if data dir already exists
+            # Check if package is installed before trying to launch
+            ok, out = _adb(t, f"shell pm path {pkg} 2>/dev/null")
+            if not ok or not out.strip():
+                continue  # Package not installed, skip launch
             check = _adb_shell(t, f"ls /data/data/{pkg}/ 2>/dev/null")
             if check:
                 continue
-            # Launch the app briefly
             if activity:
                 _adb_shell(t, f"am start -n {pkg}/{activity} 2>/dev/null")
             else:
@@ -214,27 +220,29 @@ class ProfileInjector:
 
         if launched:
             logger.info(f"  Pre-launched {len(launched)} apps to create data dirs: {launched}")
-            time.sleep(5)  # Give apps time to create their directories
+            time.sleep(5)
             for pkg in launched:
                 _adb_shell(t, f"am force-stop {pkg}")
             time.sleep(1)
 
-        # Ensure Chrome Default profile directory exists
-        chrome_default = self.CHROME_DATA
-        _adb_shell(t, f"mkdir -p '{chrome_default}'")
-        # Ensure system_ce accounts directory exists
-        _adb_shell(t, "mkdir -p /data/system_ce/0/")
-        _adb_shell(t, "mkdir -p /data/system_de/0/")
-        # Ensure GMS shared_prefs dir exists
-        _adb_shell(t, "mkdir -p /data/data/com.google.android.gms/shared_prefs")
-        # Ensure wallet dir exists
-        _adb_shell(t, "mkdir -p /data/data/com.google.android.apps.walletnfcrel/databases")
-        _adb_shell(t, "mkdir -p /data/data/com.google.android.apps.walletnfcrel/shared_prefs")
-        # Ensure Play Store dirs
-        _adb_shell(t, "mkdir -p /data/data/com.android.vending/databases")
-        _adb_shell(t, "mkdir -p /data/data/com.android.vending/shared_prefs")
-        # Ensure Chrome shared_prefs
-        _adb_shell(t, "mkdir -p /data/data/com.android.chrome/shared_prefs")
+        # Create all necessary directories directly (works even without apps installed)
+        dirs = [
+            self.CHROME_DATA,
+            "/data/system_ce/0/",
+            "/data/system_de/0/",
+            "/data/data/com.google.android.gms/shared_prefs",
+            "/data/data/com.google.android.apps.walletnfcrel/databases",
+            "/data/data/com.google.android.apps.walletnfcrel/shared_prefs",
+            "/data/data/com.android.vending/databases",
+            "/data/data/com.android.vending/shared_prefs",
+            "/data/data/com.android.chrome/shared_prefs",
+            "/data/data/com.android.chrome/app_chrome/Default/Local Storage/leveldb",
+            "/data/data/com.samsung.android.spay/databases",
+            "/data/data/com.samsung.android.spay/shared_prefs",
+        ]
+        for d in dirs:
+            _adb_shell(t, f"mkdir -p '{d}'")
+        logger.info(f"  Created {len(dirs)} app data directories")
 
     # ─── GOOGLE ACCOUNT ────────────────────────────────────────────────
 
@@ -700,8 +708,10 @@ class ProfileInjector:
         if not logs:
             return
 
+        # Cap to 50 entries to avoid ADB timeout (each is a separate command)
+        capped = logs[:50]
         count = 0
-        for log_entry in logs:
+        for log_entry in capped:
             number = log_entry.get("number", "")
             call_type = log_entry.get("type", 1)  # 1=incoming, 2=outgoing, 3=missed
             duration = log_entry.get("duration", 0)
@@ -723,8 +733,10 @@ class ProfileInjector:
         if not messages:
             return
 
+        # Cap to 30 entries to avoid ADB timeout
+        capped = messages[:30]
         count = 0
-        for msg in messages:
+        for msg in capped:
             address = msg.get("address", "")
             body = msg.get("body", "")
             msg_type = msg.get("type", 1)  # 1=received, 2=sent

@@ -1,0 +1,22 @@
+{
+  "instances": [
+    {
+      "vm": {
+        "memory_mb": 4096,
+        "cpus": 4
+      },
+      "graphics": {
+        "displays": [
+          {
+            "width": 1080,
+            "height": 2400,
+            "dpi": 420
+          }
+        ]
+      },
+      "boot": {
+        "extra_bootconfig_args": "androidboot.verifiedbootstate=green androidboot.vbmeta.device_state=locked sys.use_memfd=true"
+      }
+    }
+  ]
+}

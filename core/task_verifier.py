@@ -12,7 +12,7 @@ Verification methods:
   - Shell command output checks
 
 Usage:
-    verifier = TaskVerifier(bridge, pad_code="ACP...")
+    verifier = TaskVerifier(adb_target="127.0.0.1:6520")
     result = await verifier.verify_app_installed("com.chase.sig.android")
     result = await verifier.verify_wallet_active()
     report = await verifier.full_verify(expected_apps=[...], expect_wallet=True)
@@ -76,31 +76,25 @@ class VerifyReport:
 
 
 class TaskVerifier:
-    """Verifies device state after AI agent task execution."""
+    """Verifies device state after AI agent task execution via ADB."""
 
-    def __init__(self, bridge=None, pad_code: str = ""):
-        self._bridge = bridge
-        self.pad_code = pad_code
-
-    def _get_bridge(self):
-        if self._bridge is None:
-            from vmos_cloud_bridge import VMOSCloudBridge
-            self._bridge = VMOSCloudBridge()
-        return self._bridge
+    def __init__(self, adb_target: str = "127.0.0.1:6520", bridge=None, pad_code: str = ""):
+        self.adb_target = adb_target
+        self._bridge = bridge  # legacy compat — unused for Cuttlefish
+        self.pad_code = pad_code  # legacy compat
 
     async def _shell(self, cmd: str, wait: int = 12) -> str:
-        """Execute shell command on device and return output."""
-        bridge = self._get_bridge()
-        result = await bridge.exec_shell(self.pad_code, cmd)
-        if result.ok:
-            task_id = None
-            if hasattr(result, 'data') and result.data:
-                task_id = result.data
-            if task_id:
-                await asyncio.sleep(wait)
-                detail = await bridge._wait_for_task(self.pad_code, task_id)
-                return detail or ""
-        return ""
+        """Execute shell command on device via ADB and return output."""
+        import subprocess
+        try:
+            proc = subprocess.run(
+                ["adb", "-s", self.adb_target, "shell", cmd],
+                capture_output=True, text=True, timeout=wait + 5,
+            )
+            return proc.stdout.strip() if proc.returncode == 0 else ""
+        except Exception as e:
+            logger.debug(f"TaskVerifier._shell failed: {e}")
+            return ""
 
     # ─── INDIVIDUAL CHECKS ───────────────────────────────────────────
 
@@ -254,25 +248,25 @@ class TaskVerifier:
         )
 
     async def verify_screen_shows(self, expected_text: str) -> VerifyResult:
-        """Take screenshot and check if expected text is visible via vision."""
+        """Check if expected text is visible via UI dump."""
         try:
-            from vmos_agent_adapter import VMOSScreenAdapter
-            adapter = VMOSScreenAdapter(bridge=self._bridge, pad_code=self.pad_code)
-            state = adapter.capture_and_analyze(use_ui_dump=True)
-            all_text = " ".join(state.text_blocks).lower()
-            found = expected_text.lower() in all_text
+            output = await self._shell(
+                f"uiautomator dump /dev/tty 2>/dev/null | grep -oi '{expected_text}'",
+                wait=15,
+            )
+            found = expected_text.lower() in (output or "").lower()
             return VerifyResult(
                 check=f"screen_shows:{expected_text}",
                 passed=found,
                 detail=f"Screen text match for '{expected_text}': {'found' if found else 'not found'}",
-                method="vision",
+                method="shell",
             )
         except Exception as e:
             return VerifyResult(
                 check=f"screen_shows:{expected_text}",
                 passed=False,
-                detail=f"Vision check failed: {e}",
-                method="vision",
+                detail=f"UI dump check failed: {e}",
+                method="shell",
             )
 
     # ─── FULL VERIFY ─────────────────────────────────────────────────
@@ -287,7 +281,7 @@ class TaskVerifier:
                           expect_sms: bool = True) -> VerifyReport:
         """Run all relevant verification checks and produce a report."""
         report = VerifyReport(
-            device_id=device_id or self.pad_code,
+            device_id=device_id or self.adb_target,
             timestamp=time.time(),
         )
 

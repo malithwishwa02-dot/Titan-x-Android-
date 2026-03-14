@@ -1,11 +1,11 @@
 """
-Titan V11.3 — Redroid Camera Bridge (v4l2loopback Deepfake Injection)
-Injects deepfake video into Redroid containers via v4l2loopback virtual camera.
+Titan V11.3 — Camera Bridge (v4l2loopback Deepfake Injection)
+Injects deepfake video into Cuttlefish Android VMs via v4l2loopback virtual camera.
 
 Architecture:
-  1. Host creates /dev/video10-13 via v4l2loopback kernel module
+  1. Host creates /dev/video10-17 via v4l2loopback kernel module
   2. ffmpeg encodes deepfaked frames → v4l2 device
-  3. Redroid container mounts /dev/video10 as its camera
+  3. Cuttlefish VM accesses /dev/video* as its camera via virtio passthrough
   4. Android apps see a real camera device for selfie/liveness/KYC
 
 Modes:
@@ -104,7 +104,7 @@ def _generate_micro_movement(face_path: str, output_path: str, duration: int = 1
 # ═══════════════════════════════════════════════════════════════════════
 
 class CameraBridge:
-    """Injects deepfake video into Redroid via v4l2loopback."""
+    """Injects deepfake video into Cuttlefish VMs via v4l2loopback."""
 
     def __init__(self, device_id: str, video_device: str = "/dev/video10"):
         self.state = CameraState(device_id=device_id, video_device=video_device)

@@ -1,14 +1,15 @@
 #!/system/bin/sh
 # ═══════════════════════════════════════════════════════════════════════
-# Titan V11.3 — Persistent Boot Patch Script [DEPRECATED - Redroid]
-# This script was for Redroid Docker containers. The Titan platform has
-# migrated to Cuttlefish KVM VMs. See: cuttlefish/init.d/99-titan-patch.sh
+# Titan V11.3 — Persistent Boot Patch Script (Cuttlefish)
+# Runs inside Cuttlefish VM on every boot via /system/etc/init.d/
+# Re-applies non-persist properties that reset on reboot (gsm.*, battery, etc.)
+# Strips Cuttlefish/vsoc/Virtio artifacts for forensic convergence.
 # ═══════════════════════════════════════════════════════════════════════
 
 LOG_TAG="TitanPatch"
 log_i() { log -t "$LOG_TAG" -p i "$1"; }
 
-log_i "Titan boot patch starting..."
+log_i "Titan boot patch starting (Cuttlefish backend)..."
 
 # Wait for boot to complete
 TIMEOUT=120
@@ -52,15 +53,16 @@ setprop ro.boot.vbmeta.device_state locked
 setprop ro.boot.flash.locked 1
 log_i "Anti-emulator props set"
 
-# ─── Hide emulator artifacts (sterile file method) ───────────────────
+# ─── Hide Cuttlefish / vsoc / Virtio artifacts ───────────────────────
 # Bind-mounting /dev/null is detectable via /proc/mounts — generate clean files
 mkdir -p /data/titan
 
-# Sterile /proc/cmdline
+# Sterile /proc/cmdline — strip cuttlefish, vsoc, virtio, cutf_cvm, goldfish
 if [ -f /proc/cmdline ]; then
-    cat /proc/cmdline | sed 's/androidboot\.hardware=redroid//g' \
-        | sed 's/docker[^ ]*//g' | sed 's/containerd[^ ]*//g' \
-        | sed 's/lxc[^ ]*//g' | sed 's/  */ /g' \
+    cat /proc/cmdline | sed 's/androidboot\.hardware=cutf_cvm//g' \
+        | sed 's/cuttlefish[^ ]*//g' | sed 's/vsoc[^ ]*//g' \
+        | sed 's/virtio[^ ]*//g' | sed 's/cutf_cvm[^ ]*//g' \
+        | sed 's/goldfish[^ ]*//g' | sed 's/  */ /g' \
         > /data/titan/proc_cmdline_clean 2>/dev/null
     # Ensure non-empty
     [ -s /data/titan/proc_cmdline_clean ] || \
@@ -77,7 +79,15 @@ cat /proc/mounts | grep -v '/proc/cmdline' | grep -v '/proc/1/cgroup' \
     > /data/titan/mounts_clean 2>/dev/null
 mount -o bind /data/titan/mounts_clean /proc/mounts 2>/dev/null
 
-log_i "Proc artifacts hidden (sterile files)"
+log_i "Cuttlefish/vsoc proc artifacts hidden (sterile files)"
+
+# ─── Hide Cuttlefish-specific device nodes ────────────────────────────
+# vsock and virtio console devices betray Cuttlefish
+rm -f /dev/vsock 2>/dev/null
+mount -o bind /dev/null /dev/hvc0 2>/dev/null
+mount -o bind /dev/null /dev/vport0p1 2>/dev/null
+mount -o bind /dev/null /dev/vport0p2 2>/dev/null
+log_i "Cuttlefish device nodes hidden"
 
 # ─── Network: rename eth0 → wlan0 ────────────────────────────────────
 ip link set eth0 down 2>/dev/null
@@ -176,4 +186,4 @@ log_i "WiFi scan results generated (locale: ${WIFI_LOCALE:-US})"
 settings put global background_data_restriction 0 2>/dev/null
 log_i "GMS sync throttled"
 
-log_i "Titan boot patch complete — all 65+ vectors applied"
+log_i "Titan boot patch complete — all 65+ vectors applied (Cuttlefish)"

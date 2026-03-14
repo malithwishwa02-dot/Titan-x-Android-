@@ -44,16 +44,16 @@ class FaceSwapBody(BaseModel):
     target_b64: str  # base64 target image/frame
 
 
-def _get_agent(pad_code: str):
-    """Get or create a VMOSScreenAgent for a device."""
-    if pad_code not in _agents:
+def _get_agent(device_id: str, adb_target: str):
+    """Get or create a DeviceAgent for ADB-based screen interaction."""
+    if device_id not in _agents:
         try:
-            from vmos_screen_agent import VMOSScreenAgent
-            _agents[pad_code] = VMOSScreenAgent(pad_code=pad_code)
+            from device_agent import DeviceAgent
+            _agents[device_id] = DeviceAgent(adb_target=adb_target)
         except Exception as e:
             logger.error(f"Failed to create agent: {e}")
             return None
-    return _agents[pad_code]
+    return _agents[device_id]
 
 
 @router.get("/status")
@@ -111,20 +111,17 @@ async def ai_query(request: Request):
 
 @router.get("/screen/{device_id}")
 async def ai_read_screen(device_id: str):
-    """Read the current screen of a VMOS device using vision AI."""
+    """Read the current screen of a device using vision AI."""
     dev = dm.get_device(device_id) if dm else None
     if not dev:
         raise HTTPException(404, "Device not found")
-    if getattr(dev, "device_type", "") != "vmos_cloud":
-        raise HTTPException(400, "Screen agent only works with VMOS Cloud devices")
 
-    pad_code = getattr(dev, "vmos_pad_code", "") or device_id
-    agent = _get_agent(pad_code)
+    agent = _get_agent(device_id, dev.adb_target)
     if not agent:
         raise HTTPException(500, "Failed to initialize screen agent")
 
     result = await agent.read_screen()
-    return {"device_id": device_id, "pad_code": pad_code, **result}
+    return {"device_id": device_id, **result}
 
 
 @router.post("/screen/{device_id}/task")
@@ -140,16 +137,13 @@ async def ai_execute_task(device_id: str, body: ScreenTaskBody):
     dev = dm.get_device(device_id) if dm else None
     if not dev:
         raise HTTPException(404, "Device not found")
-    if getattr(dev, "device_type", "") != "vmos_cloud":
-        raise HTTPException(400, "Screen agent only works with VMOS Cloud devices")
 
-    pad_code = getattr(dev, "vmos_pad_code", "") or device_id
-    agent = _get_agent(pad_code)
+    agent = _get_agent(device_id, dev.adb_target)
     if not agent:
         raise HTTPException(500, "Failed to initialize screen agent")
 
     result = await agent.execute_task(body.task, max_steps=body.max_steps)
-    return {"device_id": device_id, "pad_code": pad_code, **result.to_dict()}
+    return {"device_id": device_id, **result.to_dict()}
 
 
 @router.post("/screen/{device_id}/tap")
@@ -159,8 +153,7 @@ async def ai_tap(device_id: str, body: ScreenTapBody):
     if not dev:
         raise HTTPException(404, "Device not found")
 
-    pad_code = getattr(dev, "vmos_pad_code", "") or device_id
-    agent = _get_agent(pad_code)
+    agent = _get_agent(device_id, dev.adb_target)
     if not agent:
         raise HTTPException(500, "Failed to initialize screen agent")
 
@@ -175,8 +168,7 @@ async def ai_type(device_id: str, body: ScreenTypeBody):
     if not dev:
         raise HTTPException(404, "Device not found")
 
-    pad_code = getattr(dev, "vmos_pad_code", "") or device_id
-    agent = _get_agent(pad_code)
+    agent = _get_agent(device_id, dev.adb_target)
     if not agent:
         raise HTTPException(500, "Failed to initialize screen agent")
 
@@ -190,8 +182,7 @@ async def ai_home(device_id: str):
     dev = dm.get_device(device_id) if dm else None
     if not dev:
         raise HTTPException(404, "Device not found")
-    pad_code = getattr(dev, "vmos_pad_code", "") or device_id
-    agent = _get_agent(pad_code)
+    agent = _get_agent(device_id, dev.adb_target)
     if not agent:
         raise HTTPException(500, "Agent unavailable")
     ok = await agent.go_home()
@@ -204,8 +195,7 @@ async def ai_back(device_id: str):
     dev = dm.get_device(device_id) if dm else None
     if not dev:
         raise HTTPException(404, "Device not found")
-    pad_code = getattr(dev, "vmos_pad_code", "") or device_id
-    agent = _get_agent(pad_code)
+    agent = _get_agent(device_id, dev.adb_target)
     if not agent:
         raise HTTPException(500, "Agent unavailable")
     ok = await agent.go_back()
@@ -224,8 +214,7 @@ async def ai_open_app(device_id: str, request: Request):
     if not dev:
         raise HTTPException(404, "Device not found")
 
-    pad_code = getattr(dev, "vmos_pad_code", "") or device_id
-    agent = _get_agent(pad_code)
+    agent = _get_agent(device_id, dev.adb_target)
     if not agent:
         raise HTTPException(500, "Agent unavailable")
     ok = await agent.open_app(package)

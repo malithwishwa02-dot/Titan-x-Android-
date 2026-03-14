@@ -1,7 +1,8 @@
 """
 Titan V11.3 — Device Presets (30+ Android Device Identities)
 Complete build.prop, IMEI TAC, MAC OUI, GPU string for each device.
-Used by anomaly patcher to make Redroid indistinguishable from real hardware.
+Used by Cuttlefish launch config and anomaly patcher to make VMs
+indistinguishable from real hardware.
 """
 
 from dataclasses import dataclass

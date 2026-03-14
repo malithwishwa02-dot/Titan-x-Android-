@@ -1,12 +1,13 @@
-# Titan V11.3 — Custom Redroid Image with GMS + ARM Translation
+# Titan V11.3 — Custom Redroid Image with GMS + ARM Translation [DEPRECATED]
+# =========================================================================
+# DEPRECATED: The Titan platform has migrated from Redroid Docker containers
+# to Cuttlefish KVM-based Android VMs. This Dockerfile is no longer used.
+# Cuttlefish images are downloaded from AOSP CI and launched via launch_cvd.
+# See: scripts/setup_cuttlefish.sh for the new setup procedure.
+#
+# Original description:
 # Base: Redroid Android 14 with Google Mobile Services and libndk_translation
-#
-# Build:
-#   docker build -f Dockerfile.redroid-gms -t titan-redroid:14-gms .
-#
-# The GMS (MindTheGapps) and libndk_translation layers are added
-# on top of the stock Redroid image. Init scripts for persistent
-# anomaly patching are baked into /system/etc/init.d/.
+# Build: docker build -f Dockerfile.redroid-gms -t titan-redroid:14-gms .
 
 FROM redroid/redroid:14.0.0-latest
 

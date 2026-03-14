@@ -333,13 +333,13 @@
       <div>
         <div class="grp mb-4">
           <h3 class="grp-title text-cyan-400">Trust Score</h3>
-          <div x-show="!trustScore" class="text-sm text-gray-500">Run injection to see trust score</div>
-          <div x-show="trustScore">
+          <div x-show="trustScore===null||trustScore===undefined" class="text-sm text-gray-500">Run injection to see trust score</div>
+          <div x-show="trustScore!==null&&trustScore!==undefined">
             <div class="flex items-center gap-4 mb-3">
-              <div class="score-ring w-16 h-16 text-lg" :class="(trustScore?.trust_score||0)>=80?'bg-green-900/50 text-green-400 border-2 border-green-700':(trustScore?.trust_score||0)>=50?'bg-yellow-900/50 text-yellow-400 border-2 border-yellow-700':'bg-red-900/50 text-red-400 border-2 border-red-700'" x-text="(trustScore?.trust_score||0)+'%'"></div>
-              <div><div class="text-sm font-bold text-white" x-text="'Grade: '+(trustScore?.grade||'&#8212;')"></div></div>
+              <div class="score-ring w-16 h-16 text-lg" :class="(trustScore?.trust_score??0)>=80?'bg-green-900/50 text-green-400 border-2 border-green-700':(trustScore?.trust_score??0)>=50?'bg-yellow-900/50 text-yellow-400 border-2 border-yellow-700':'bg-red-900/50 text-red-400 border-2 border-red-700'" x-text="(trustScore?.trust_score??0)+'%'"></div>
+              <div><div class="text-sm font-bold" :class="{'text-green-400':(trustScore?.trust_score??0)>=80,'text-yellow-400':(trustScore?.trust_score??0)>=50&&(trustScore?.trust_score??0)<80,'text-red-400':(trustScore?.trust_score??0)<50}" x-text="'Grade: '+(trustScore?.grade||'—')"></div><div class="text-xs text-gray-500 mt-1" x-text="(trustScore?.trust_score??0)+'/100'"></div></div>
             </div>
-            <div class="space-y-1"><template x-for="(val,key) in trustScore?.checks||{}" :key="key"><div class="flex justify-between text-xs"><span class="text-gray-400" x-text="key"></span><span :class="val?'text-green-400':'text-red-400'" x-text="val?'\u2713':'\u2717'"></span></div></template></div>
+            <div class="space-y-1"><template x-for="(val,key) in trustScore?.checks||{}" :key="key"><div class="flex justify-between text-xs"><span class="text-gray-400" x-text="key.replace(/_/g,' ')"></span><span :class="val===true||val==='true'||val>0?'text-green-400':'text-red-400'" x-text="val===true||val==='true'||val>0?'\u2713':'\u2717'"></span></div></template></div>
           </div>
         </div>
         <div class="log-area h-40" x-text="injectLog||'Select device and profile, then INJECT'"></div>

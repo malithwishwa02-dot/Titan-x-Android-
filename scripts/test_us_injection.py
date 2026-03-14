@@ -3,7 +3,7 @@
 Titan V11.3 — Full US Bundle Injection Test
 Tests the complete injection pipeline:
   1. AndroidProfileForge → generate US profile
-  2. ProfileInjector → inject all data into Redroid device
+  2. ProfileInjector → inject all data into Cuttlefish Android VM
   3. WalletProvisioner → inject CC into Google Pay / Play / Chrome
   4. GoogleAccountInjector → inject Google account
   5. AppDataForger → inject per-app SharedPrefs

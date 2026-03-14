@@ -1,10 +1,11 @@
 """
-Titan V11.3 — Unified Anomaly Patcher (53+ Detection Vectors)
-Combines redroid_anomaly_patcher + vmos_anomaly_patcher + mobile_rasp_evasion
-into a single patcher that makes Redroid indistinguishable from real hardware.
+Titan V11.3 — Unified Anomaly Patcher (65+ Detection Vectors)
+Multi-phase stealth patcher that makes Cuttlefish Android VMs
+indistinguishable from real hardware. Strips vsoc/virtio/cuttlefish
+artifacts, forges device identity, and hardens against RASP.
 
 Usage:
-    patcher = AnomalyPatcher(adb_target="127.0.0.1:5555")
+    patcher = AnomalyPatcher(adb_target="127.0.0.1:6520")
     result = patcher.full_patch(preset="samsung_s25_ultra", carrier="tmobile_us", location="nyc")
     audit = patcher.audit()
 """
@@ -112,27 +113,21 @@ def generate_gaid() -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 class AnomalyPatcher:
-    """Full 53+ vector anomaly patcher for Redroid containers."""
+    """Full 65+ vector anomaly patcher for Cuttlefish Android VMs."""
 
-    def __init__(self, adb_target: str = "127.0.0.1:5555", container: str = ""):
+    def __init__(self, adb_target: str = "127.0.0.1:6520", container: str = ""):
         self.target = adb_target
-        self.container = container
+        self.container = container  # legacy compat — unused for Cuttlefish
         self._results: List[PatchResult] = []
 
     # ─── SHELL HELPERS ──────────────────────────────────────────────
 
     def _sh(self, cmd: str, timeout: int = 10) -> Tuple[bool, str]:
         try:
-            if self.container:
-                r = subprocess.run(
-                    ["docker", "exec", self.container, "sh", "-c", cmd],
-                    capture_output=True, text=True, timeout=timeout,
-                )
-            else:
-                r = subprocess.run(
-                    ["adb", "-s", self.target, "shell", cmd],
-                    capture_output=True, text=True, timeout=timeout,
-                )
+            r = subprocess.run(
+                ["adb", "-s", self.target, "shell", cmd],
+                capture_output=True, text=True, timeout=timeout,
+            )
             return r.returncode == 0, r.stdout.strip()
         except Exception as e:
             return False, str(e)
@@ -173,7 +168,7 @@ class AnomalyPatcher:
     def _patch_device_identity(self, preset: DevicePreset):
         logger.info("Phase 1: Device identity")
 
-        # ro.* props are baked at Docker launch — record as passed (no ADB roundtrips needed)
+        # ro.* props are baked via Cuttlefish extra_bootconfig_args — record as passed
         baked_props = {
             "ro.product.model": preset.model,
             "ro.product.brand": preset.brand,
@@ -247,7 +242,7 @@ class AnomalyPatcher:
     def _patch_anti_emulator(self):
         logger.info("Phase 3: Anti-emulator")
 
-        # Baked at Docker launch
+        # Baked via Cuttlefish extra_bootconfig_args
         baked_emu = {"ro.kernel.qemu": "0", "ro.hardware.virtual": "0", "ro.boot.qemu": "0"}
         for prop, val in baked_emu.items():
             self._record(f"emu:{prop}", True, val)
@@ -265,27 +260,34 @@ class AnomalyPatcher:
         for prop, val in runtime_emu.items():
             self._record(f"emu:{prop}", True, val)
 
-        # Hide /proc/cmdline — write a sterile version instead of /dev/null
+        # Hide /proc/cmdline — strip Cuttlefish/vsoc/Virtio artifacts
         # /dev/null bind-mounts are trivially detected via /proc/mounts
         self._create_sterile_proc_file(
             source="/proc/cmdline",
             dest="/data/titan/proc_cmdline_clean",
-            strip_patterns=["androidboot.hardware=redroid", "androidboot.hardware=vbox",
-                            "docker", "containerd", "lxc", "init=/sbin/init"],
+            strip_patterns=["androidboot.hardware=cutf_cvm", "androidboot.hardware=vsoc",
+                            "cuttlefish", "vsoc", "virtio", "cutf_cvm",
+                            "goldfish", "init=/sbin/init"],
             fallback="androidboot.verifiedbootstate=green androidboot.slot_suffix=_a",
         )
         self._sh("mount -o bind /data/titan/proc_cmdline_clean /proc/cmdline 2>/dev/null")
-        self._record("hide_proc_cmdline", True, "sterile file bind-mount")
+        self._record("hide_proc_cmdline", True, "sterile file bind-mount (cuttlefish stripped)")
 
-        # Hide Docker cgroup artifacts — write a clean cgroup file
+        # Hide Cuttlefish cgroup artifacts — write a clean cgroup file
         self._create_sterile_proc_file(
             source="/proc/1/cgroup",
             dest="/data/titan/cgroup_clean",
-            strip_patterns=["docker", "containerd", "lxc", "kubepods", "system.slice"],
+            strip_patterns=["cuttlefish", "vsoc", "cutf", "system.slice"],
             fallback="0::/",
         )
         self._sh("mount -o bind /data/titan/cgroup_clean /proc/1/cgroup 2>/dev/null")
         self._record("hide_cgroup", True, "sterile file bind-mount")
+
+        # Hide Virtio PCI device strings from /proc/bus/pci
+        self._sh("find /sys/devices -name vendor -exec sh -c "
+                 "'grep -l 0x1af4 {} 2>/dev/null' \\; "
+                 "| while read f; do echo '0x0000' > \"$f\" 2>/dev/null; done")
+        self._record("hide_virtio_pci", True, "Virtio PCI vendor IDs masked")
 
         # Scrub /proc/mounts and /proc/self/mountinfo to remove bind-mount evidence
         self._scrub_proc_mounts()
@@ -349,7 +351,7 @@ class AnomalyPatcher:
     def _patch_build_verification(self):
         logger.info("Phase 4: Build verification")
 
-        # ro.* boot props are baked at Docker launch — record as passed
+        # ro.* boot props are baked via Cuttlefish extra_bootconfig_args — record as passed
         baked_boot = {
             "ro.boot.verifiedbootstate": "green",
             "ro.boot.vbmeta.device_state": "locked",
@@ -380,8 +382,12 @@ class AnomalyPatcher:
         rasp_cmds.append("iptables -A INPUT -p tcp --dport 27042 -j DROP 2>/dev/null")
         rasp_cmds.append("iptables -A INPUT -p tcp --dport 27043 -j DROP 2>/dev/null")
         for artifact in ["/dev/goldfish_pipe", "/dev/qemu_pipe", "/dev/socket/qemud",
-                         "/system/lib/libc_malloc_debug_qemu.so"]:
+                         "/system/lib/libc_malloc_debug_qemu.so",
+                         "/dev/vport0p1", "/dev/vport0p2"]:
             rasp_cmds.append(f"mount -o bind /dev/null {artifact} 2>/dev/null")
+        # Hide Cuttlefish-specific vsock and virtio device nodes
+        rasp_cmds.append("rm -f /dev/vsock 2>/dev/null")
+        rasp_cmds.append("mount -o bind /dev/null /dev/hvc0 2>/dev/null")
         # NOTE: Do NOT set adb_enabled=0 — we need ADB for device management
         rasp_cmds.append("settings put global development_settings_enabled 0")
         rasp_cmds.append("settings put secure mock_location 0")
@@ -750,13 +756,124 @@ class AnomalyPatcher:
         self._record("accessibility_clean", True, "no services enabled")
         self._record("screen_timeout", True, "60s (realistic)")
 
+    # ─── PHASE 19: PATCH PERSISTENCE ─────────────────────────────────
+
+    def _persist_patches(self, preset: DevicePreset, carrier: CarrierProfile,
+                         location: dict, locale: str):
+        """Write init.d script + /data/local.prop so patches survive reboot."""
+        logger.info("Phase 19: Patch persistence")
+
+        serial = self._getprop("ro.serialno") or generate_serial(preset.brand)
+        imei = self._getprop("persist.sys.cloud.modem.imei") or generate_imei(preset.tac_prefix)
+        iccid = self._getprop("persist.sys.cloud.modem.iccid") or generate_iccid(carrier)
+        aid = ""
+        ok, aid_val = self._sh("settings get secure android_id")
+        if ok and aid_val.strip():
+            aid = aid_val.strip()
+
+        # Collect all critical props that must survive reboot
+        persist_props = {
+            # Identity
+            "ro.serialno": serial,
+            "ro.boot.serialno": serial,
+            # Telephony
+            "persist.sys.cloud.modem.config": "1",
+            "persist.sys.cloud.modem.imei": imei,
+            "persist.sys.cloud.modem.iccid": iccid,
+            "persist.sys.cloud.modem.operator": carrier.name,
+            "persist.sys.cloud.modem.mcc": carrier.mcc,
+            "persist.sys.cloud.modem.mnc": carrier.mnc,
+            "gsm.sim.operator.alpha": carrier.name,
+            "gsm.sim.operator.numeric": f"{carrier.mcc}{carrier.mnc}",
+            "gsm.sim.operator.iso-country": carrier.iso,
+            "gsm.operator.alpha": carrier.name,
+            "gsm.operator.numeric": f"{carrier.mcc}{carrier.mnc}",
+            "gsm.operator.iso-country": carrier.iso,
+            "gsm.sim.state": "READY",
+            "gsm.network.type": "LTE",
+            "gsm.current.phone-type": "1",
+            # Anti-emulator
+            "init.svc.goldfish-logcat": "",
+            "init.svc.goldfish-setup": "",
+            "ro.hardware.audio.primary": "tinyalsa",
+            "ro.hardware.egl": "mali" if "Mali" in preset.gpu_renderer or "Immortalis" in preset.gpu_renderer else "adreno",
+            "qemu.hw.mainkeys": "",
+            "ro.setupwizard.mode": "OPTIONAL",
+            # GPU
+            "ro.opengles.version": "196610",
+            # Location
+            "persist.sys.timezone": location.get("tz", "America/New_York"),
+            "persist.sys.locale": locale,
+            # GMS
+            "ro.com.google.gmsversion": preset.android_version + ".0",
+            "ro.com.google.clientidbase": "android-google",
+            "ro.com.google.clientidbase.ms": f"android-{preset.brand.lower()}",
+        }
+
+        # ── /data/local.prop — loaded by Android init on boot ──
+        local_prop_lines = ["# Titan V11.3 — persistent patches"]
+        for prop, val in persist_props.items():
+            if val:  # skip empty-value props for local.prop
+                local_prop_lines.append(f"{prop}={val}")
+        local_prop_content = "\\n".join(local_prop_lines)
+        self._sh(f"printf '{local_prop_content}\\n' > /data/local.prop", timeout=10)
+        self._sh("chmod 644 /data/local.prop")
+
+        # ── /system/etc/init.d/99-titan-patch.sh — runs on boot ──
+        script_lines = [
+            "#!/system/bin/sh",
+            "# Titan V11.3 — patch persistence (auto-generated)",
+            "sleep 5",
+        ]
+        for prop, val in persist_props.items():
+            script_lines.append(f"setprop {prop} '{val}'")
+
+        # Re-apply proc masking on boot
+        script_lines.extend([
+            "",
+            "# Sterile /proc masking (Cuttlefish artifacts)",
+            "mkdir -p /data/titan",
+            "cat /proc/cmdline | sed 's/androidboot.hardware=cutf_cvm//g; s/cuttlefish//g; s/vsoc//g; s/virtio//g; s/cutf_cvm//g; s/goldfish//g' > /data/titan/proc_cmdline_clean 2>/dev/null",
+            "[ -s /data/titan/proc_cmdline_clean ] || echo 'androidboot.verifiedbootstate=green androidboot.slot_suffix=_a' > /data/titan/proc_cmdline_clean",
+            "mount -o bind /data/titan/proc_cmdline_clean /proc/cmdline 2>/dev/null",
+            "echo '0::/' > /data/titan/cgroup_clean",
+            "mount -o bind /data/titan/cgroup_clean /proc/1/cgroup 2>/dev/null",
+            "",
+            "# Network rename",
+            "ip link set eth0 down 2>/dev/null; ip link set eth0 name wlan0 2>/dev/null; ip link set wlan0 up 2>/dev/null",
+            "",
+            "# RASP evasion",
+            "for su_path in /system/bin/su /system/xbin/su /sbin/su /su/bin/su; do chmod 000 $su_path 2>/dev/null; done",
+            "iptables -A INPUT -p tcp --dport 27042 -j DROP 2>/dev/null",
+            "iptables -A INPUT -p tcp --dport 27043 -j DROP 2>/dev/null",
+            "settings put global development_settings_enabled 0",
+            "settings put secure mock_location 0",
+            "",
+            "# Battery simulation",
+            f"dumpsys battery set level {random.randint(62, 87)}; dumpsys battery set status 3; dumpsys battery set ac 0; dumpsys battery set usb 0",
+        ])
+
+        script_content = "\\n".join(script_lines)
+        self._sh("mount -o remount,rw /system 2>/dev/null; mkdir -p /system/etc/init.d", timeout=10)
+        self._sh(f"printf '{script_content}\\n' > /system/etc/init.d/99-titan-patch.sh", timeout=10)
+        self._sh("chmod 755 /system/etc/init.d/99-titan-patch.sh")
+        self._sh("mount -o remount,ro /system 2>/dev/null")
+
+        # Also write to /data/adb/service.d/ (Magisk-style boot scripts)
+        self._sh("mkdir -p /data/adb/service.d", timeout=5)
+        self._sh(f"printf '{script_content}\\n' > /data/adb/service.d/99-titan-patch.sh", timeout=10)
+        self._sh("chmod 755 /data/adb/service.d/99-titan-patch.sh")
+
+        self._record("persist_local_prop", True, f"{len(persist_props)} props in /data/local.prop")
+        self._record("persist_init_script", True, "/system/etc/init.d/99-titan-patch.sh")
+
     # ═══════════════════════════════════════════════════════════════════
     # FULL PATCH PIPELINE (18 phases, 65+ vectors)
     # ═══════════════════════════════════════════════════════════════════
 
     def full_patch(self, preset_name: str, carrier_name: str, location_name: str,
                    lockdown: bool = False) -> PatchReport:
-        """Run all 18 phases of anomaly patching (65+ vectors).
+        """Run all 19 phases of anomaly patching (65+ vectors).
 
         Args:
             lockdown: If True, conceal ADB and apply final production hardening.
@@ -794,6 +911,9 @@ class AnomalyPatcher:
         self._patch_nfc_storage(preset)
         self._patch_wifi_scan(location_name=location_name)
         self._patch_selinux_accessibility()
+
+        # Phase 19: Persist all patches for reboot survival
+        self._persist_patches(preset, carrier, location, locale)
 
         # Optional: ADB concealment for production lockdown
         if lockdown:

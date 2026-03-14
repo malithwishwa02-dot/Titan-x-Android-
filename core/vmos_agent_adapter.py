@@ -1,18 +1,16 @@
 """
-Titan V11.3 — VMOS Cloud Agent Adapter (Synchronous)
+Titan V11.3 — VMOS Cloud Agent Adapter [DEPRECATED]
+=====================================================
+DEPRECATED: This module is no longer used. The Titan platform has migrated
+from VMOS Cloud to Cuttlefish KVM-based Android VMs. All device interaction
+is now handled via standard ADB using device_agent.py, touch_simulator.py,
+and screen_analyzer.py.
+
+This file is retained for reference only and will be removed in a future release.
+
+Original description:
 Provides ScreenAnalyzer and TouchSimulator-compatible interfaces
 that route through VMOS Cloud APIs using direct synchronous HTTP.
-
-No async/event-loop — works from any thread (agent runs in background threads).
-
-Usage:
-    from vmos_agent_adapter import VMOSScreenAdapter, VMOSTouchAdapter
-
-    screen = VMOSScreenAdapter(api_key=AK, api_secret=SK, pad_code="APP62...")
-    touch = VMOSTouchAdapter(api_key=AK, api_secret=SK, pad_code="APP62...")
-
-    state = screen.capture_and_analyze()
-    touch.tap(540, 1200)
 """
 
 import hashlib

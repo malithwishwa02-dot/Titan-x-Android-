@@ -326,14 +326,19 @@ TASK_TEMPLATES = {
         "category": "sign_in",
     },
     # ── WALLET ────────────────────────────────────────────────────────
-    "wallet_add_card": {
-        "prompt": "Open Google Wallet (or Google Pay). Tap 'Add to Wallet' or 'Add payment method'. Enter card number {card_number}, expiry {card_exp}, CVV {card_cvv}, cardholder name {card_name}. Accept terms and complete verification if needed.",
-        "params": ["card_number", "card_exp", "card_cvv", "card_name"],
+    "wallet_verify": {
+        "prompt": "Open Google Wallet (or Google Pay) app. Check if a payment card is visible on the main screen. If a card ending in {card_last4} is shown, the wallet is set up correctly. Take a screenshot showing the card. Then go back to home screen.",
+        "params": ["card_last4"],
         "category": "wallet",
     },
-    "wallet_samsung_pay": {
-        "prompt": "Open Samsung Pay. Tap 'Add card'. Enter card number {card_number}, expiry {card_exp}, CVV {card_cvv}. Accept terms. Complete any bank verification steps.",
-        "params": ["card_number", "card_exp", "card_cvv"],
+    "wallet_add_card_ui": {
+        "prompt": "Open Google Wallet (or Google Pay). Tap 'Add to Wallet' or '+' button. Select 'Payment card' or 'Credit or debit card'. When the camera/scanner appears, tap 'Enter details manually'. Fill in the card details when prompted and accept all terms. Complete any bank verification steps that appear.",
+        "params": [],
+        "category": "wallet",
+    },
+    "play_store_add_payment": {
+        "prompt": "Open Google Play Store. Tap your profile icon (top right). Tap 'Payments & subscriptions'. Tap 'Payment methods'. Tap 'Add payment method' or 'Add credit or debit card'. Follow the prompts to add a card. Accept any terms.",
+        "params": [],
         "category": "wallet",
     },
     # ── AGING / WARMUP ────────────────────────────────────────────────
@@ -540,7 +545,7 @@ class DeviceAgent:
         traj = TrajectoryLogger(task_id=task_id, device_id=task.device_id)
         traj.set_metadata(
             prompt=task.prompt, model=task.model, persona=task.persona,
-            device_type="vmos_cloud" if "vmos" in task.device_id else "redroid",
+            device_type="cuttlefish",
         )
         self._current_traj = traj
 

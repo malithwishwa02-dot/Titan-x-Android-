@@ -153,7 +153,7 @@ class SensorNoiseModel:
 
 
 class SensorSimulator:
-    """Full sensor simulation for a Redroid device.
+    """Full sensor simulation for a Cuttlefish Android VM.
 
     Creates three-axis noise models for accelerometer, gyroscope,
     and magnetometer, with gesture coupling for correlated readings.
@@ -340,16 +340,17 @@ class SensorSimulator:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# VMOS CLOUD ADAPTER
+# VMOS CLOUD ADAPTER [DEPRECATED — retained for reference, no longer called]
+# Cuttlefish VMs use the base SensorSimulator with standard ADB.
 # ═══════════════════════════════════════════════════════════════════════
 
 class VMOSSensorAdapter(SensorSimulator):
-    """SensorSimulator variant for VMOS Cloud devices.
+    """[DEPRECATED] SensorSimulator variant for VMOS Cloud devices.
 
-    Overrides _sh to route setprop commands through VMOS asyncCmd
-    (synchronous http.client POST) instead of adb subprocess.
+    This class is no longer used. Cuttlefish VMs use the base
+    SensorSimulator class with standard ADB shell commands.
 
-    Usage:
+    Usage (legacy):
         adapter = VMOSSensorAdapter(pad_code="ACP2509244LGV1MV",
                                     api_key=AK, api_secret=SK, brand="samsung")
         adapter.couple_with_gesture("tap", magnitude=0.3)

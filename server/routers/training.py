@@ -61,7 +61,7 @@ async def demo_start(device_id: str, body: DemoStartBody):
 
     session = _recorder.start_session(
         device_id=device_id,
-        pad_code=dev.vmos_pad_code or "",
+        pad_code="",
         prompt=body.prompt,
         task_category=body.task_category,
         app_context=body.app_context,
@@ -101,12 +101,12 @@ async def demo_action(session_id: str, body: DemoActionBody):
         screen_context=screen_context,
     )
 
-    # Also execute the action on the device
+    # Execute the action on the device via ADB
     dev = dm.get_device(session.device_id)
-    if dev and dev.vmos_pad_code:
+    if dev:
         try:
-            from vmos_agent_adapter import VMOSTouchAdapter
-            touch = VMOSTouchAdapter(pad_code=dev.vmos_pad_code)
+            from touch_simulator import TouchSimulator
+            touch = TouchSimulator(adb_target=dev.adb_target)
             if body.action == "tap":
                 touch.tap(body.x, body.y)
             elif body.action == "type":
@@ -264,11 +264,8 @@ async def verify_device(device_id: str, body: VerifyBody):
     dev = dm.get_device(device_id)
     if not dev:
         raise HTTPException(404, "Device not found")
-    if not dev.vmos_pad_code:
-        raise HTTPException(400, "Only VMOS Cloud devices supported for verify")
-
     from task_verifier import TaskVerifier
-    verifier = TaskVerifier(pad_code=dev.vmos_pad_code)
+    verifier = TaskVerifier(adb_target=dev.adb_target)
     verify_report = await verifier.full_verify(
         device_id=device_id,
         expected_apps=body.expected_apps,
