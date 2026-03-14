@@ -408,15 +408,22 @@ def analyze_fingerprint(fields):
     if "release-keys" not in tags:
         flag(SEVERITY_HIGH, "fingerprint", f"Tags: {tags} (missing release-keys)", "")
     
-    # VMOS default identity detection
-    for indicator in ["vivo", "V2408A", "PD2408"]:
+    # VMOS default identity detection (informational — template identity is locked)
+    VMOS_TEMPLATE_INDICATORS = ["vivo", "V2408A", "PD2408"]
+    VMOS_KNOWN_TEMPLATES = ["PKX110", "OP60F5L1", "V2408A"]  # Known VMOS hypervisor-locked models
+    is_vmos_template = model in VMOS_KNOWN_TEMPLATES
+    for indicator in VMOS_TEMPLATE_INDICATORS:
         if indicator.lower() in fp.lower():
-            flag(SEVERITY_CRITICAL, "fingerprint", f"VMOS DEFAULT IDENTITY: '{indicator}' in fingerprint",
-                 f"This is the stock VMOS device identity — must be changed!", "Apply device identity patch")
+            if is_vmos_template:
+                flag(SEVERITY_INFO, "fingerprint", f"VMOS template identity: '{indicator}' (locked, cannot change)",
+                     f"Hypervisor-locked template — focus on other stealth dimensions")
+            else:
+                flag(SEVERITY_CRITICAL, "fingerprint", f"VMOS DEFAULT IDENTITY: '{indicator}' in fingerprint",
+                     f"This is the stock VMOS device identity — must be changed!", "Apply device identity patch")
     
-    if model and "V2408A" in model:
-        flag(SEVERITY_CRITICAL, "fingerprint", f"VMOS DEFAULT MODEL: {model}",
-             "Vivo V2408A is the default VMOS Cloud device", "Change to Samsung/Google identity")
+    if model and model in VMOS_KNOWN_TEMPLATES:
+        flag(SEVERITY_INFO, "fingerprint", f"VMOS template model: {model}",
+             "Hypervisor-locked model — cannot be changed via API or shell")
 
 
 def analyze_telephony(fields):

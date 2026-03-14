@@ -144,6 +144,9 @@ class ProfileInjector:
         _ensure_adb_root(self.target)
         logger.info(f"Injecting profile {self.result.profile_id} → {self.target}")
 
+        # Ensure app data directories exist by briefly launching key packages
+        self._ensure_app_dirs()
+
         # Stop Chrome and other Google apps to avoid DB locks
         for pkg in ["com.android.chrome", "com.google.android.gms",
                     "com.android.vending", "com.google.android.apps.walletnfcrel"]:
@@ -184,6 +187,54 @@ class ProfileInjector:
 
         logger.info(f"Injection complete: {self.result.to_dict()}")
         return self.result
+
+    # ─── ENSURE APP DATA DIRS ────────────────────────────────────────────
+
+    def _ensure_app_dirs(self):
+        """Launch key apps briefly to create their data directories on a fresh device."""
+        t = self.target
+        packages_to_init = [
+            ("com.android.chrome", "com.google.android.apps.chrome.Main"),
+            ("com.google.android.gms", None),
+            ("com.android.vending", None),
+            ("com.google.android.apps.walletnfcrel", None),
+        ]
+        launched = []
+        for pkg, activity in packages_to_init:
+            # Check if data dir already exists
+            check = _adb_shell(t, f"ls /data/data/{pkg}/ 2>/dev/null")
+            if check:
+                continue
+            # Launch the app briefly
+            if activity:
+                _adb_shell(t, f"am start -n {pkg}/{activity} 2>/dev/null")
+            else:
+                _adb_shell(t, f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1 2>/dev/null")
+            launched.append(pkg)
+
+        if launched:
+            logger.info(f"  Pre-launched {len(launched)} apps to create data dirs: {launched}")
+            time.sleep(5)  # Give apps time to create their directories
+            for pkg in launched:
+                _adb_shell(t, f"am force-stop {pkg}")
+            time.sleep(1)
+
+        # Ensure Chrome Default profile directory exists
+        chrome_default = self.CHROME_DATA
+        _adb_shell(t, f"mkdir -p '{chrome_default}'")
+        # Ensure system_ce accounts directory exists
+        _adb_shell(t, "mkdir -p /data/system_ce/0/")
+        _adb_shell(t, "mkdir -p /data/system_de/0/")
+        # Ensure GMS shared_prefs dir exists
+        _adb_shell(t, "mkdir -p /data/data/com.google.android.gms/shared_prefs")
+        # Ensure wallet dir exists
+        _adb_shell(t, "mkdir -p /data/data/com.google.android.apps.walletnfcrel/databases")
+        _adb_shell(t, "mkdir -p /data/data/com.google.android.apps.walletnfcrel/shared_prefs")
+        # Ensure Play Store dirs
+        _adb_shell(t, "mkdir -p /data/data/com.android.vending/databases")
+        _adb_shell(t, "mkdir -p /data/data/com.android.vending/shared_prefs")
+        # Ensure Chrome shared_prefs
+        _adb_shell(t, "mkdir -p /data/data/com.android.chrome/shared_prefs")
 
     # ─── GOOGLE ACCOUNT ────────────────────────────────────────────────
 

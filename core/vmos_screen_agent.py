@@ -25,6 +25,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -418,6 +419,19 @@ Rules:
         self._action_log = []
         self._step = 0
 
+        # ── Trajectory logging ──
+        traj = None
+        try:
+            from trajectory_logger import TrajectoryLogger
+            task_id = f"vmos-task-{uuid.uuid4().hex[:8]}"
+            traj = TrajectoryLogger(task_id=task_id, device_id=self.pad_code)
+            traj.set_metadata(
+                prompt=task, model=self.ollama_model,
+                device_type="vmos_cloud",
+            )
+        except Exception:
+            pass
+
         logger.info(f"[{self.pad_code}] Starting task: {task}")
 
         for step in range(max_steps):
@@ -473,12 +487,37 @@ Rules:
             ok = await self.execute_action(action)
             log_entry["executed"] = ok
 
-            # 6. Wait for screen to update
+            # 6. Record step for training data
+            if traj:
+                traj.log_step(
+                    step=self._step,
+                    screen_b64=image_b64,
+                    screen_context=screen.description,
+                    screen_width=0, screen_height=0,
+                    current_app=screen.current_app,
+                    element_count=len(screen.clickable_elements),
+                    vision_used=True,
+                    vision_description=screen.raw_analysis[:500] if hasattr(screen, 'raw_analysis') else "",
+                    llm_model=self.ollama_model,
+                    action={"action": action.action_type, "x": action.x,
+                            "y": action.y, "text": action.text,
+                            "reason": action.reason},
+                    action_type=action.action_type,
+                    action_success=ok,
+                    action_reasoning=action.reason,
+                )
+
+            # 7. Wait for screen to update
             await asyncio.sleep(STEP_DELAY)
 
         result.steps_taken = self._step
         result.actions_log = self._action_log
         result.duration = time.time() - start
+
+        # Finalize trajectory
+        if traj:
+            status = "completed" if result.success else "failed"
+            traj.finalize(status=status, total_steps=result.steps_taken)
 
         logger.info(
             f"[{self.pad_code}] Task {'completed' if result.success else 'failed'} "

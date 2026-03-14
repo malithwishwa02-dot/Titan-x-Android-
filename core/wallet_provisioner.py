@@ -281,7 +281,8 @@ class WalletProvisioner:
 
         # 3. Chrome autofill card
         self._provision_chrome_autofill(
-            clean_num, last4, exp_month, exp_year, cardholder, network_info, result,
+            clean_num, last4, exp_month, exp_year, cardholder, network_info,
+            persona_email, result,
         )
 
         # 4. Card-aware bank SMS notifications
@@ -506,6 +507,7 @@ class WalletProvisioner:
     def _provision_chrome_autofill(self, card_number: str, last4: str,
                                     exp_month: int, exp_year: int,
                                     cardholder: str, network_info: Dict,
+                                    persona_email: str,
                                     result: WalletProvisionResult):
         """Write card into Chrome's Web Data autofill database."""
         try:

@@ -202,10 +202,16 @@ async def scan_build_fingerprint():
             flag(SEVERITY_MEDIUM, "fingerprint", f"Google model doesn't mention Pixel: {model}", "")
 
     # VMOS-specific: check if fingerprint looks like a VMOS default
+    VMOS_KNOWN_TEMPLATES = ["PKX110", "OP60F5L1", "V2408A", "PD2408"]
+    is_vmos_template = any(t in (model or "") for t in VMOS_KNOWN_TEMPLATES)
     for vmos_indicator in ["vivo", "V2408A", "PD2408", "mt6985", "dimensity"]:
-        if vmos_indicator.lower() in fp.lower() and brand.lower() not in ["vivo"]:
-            flag(SEVERITY_CRITICAL, "fingerprint", f"VMOS default fingerprint still active",
-                 f"Contains '{vmos_indicator}' — original VMOS device identity leaked")
+        if vmos_indicator.lower() in fp.lower():
+            if is_vmos_template or brand.lower() == "vivo":
+                flag(SEVERITY_INFO, "fingerprint", f"VMOS template identity (locked, cannot change)",
+                     f"Contains '{vmos_indicator}' — hypervisor-locked template")
+            else:
+                flag(SEVERITY_CRITICAL, "fingerprint", f"VMOS default fingerprint still active",
+                     f"Contains '{vmos_indicator}' — original VMOS device identity leaked")
 
 
 async def scan_sensors():

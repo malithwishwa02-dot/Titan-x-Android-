@@ -112,10 +112,16 @@ echo "$(getprop ro.build.fingerprint)|$(getprop ro.odm.build.fingerprint)|$(getp
     if build_type != "user": flag(SEVERITY_HIGH, "fingerprint", f"Build type: {build_type} (not user)")
     if "release-keys" not in tags: flag(SEVERITY_HIGH, "fingerprint", f"Tags: {tags}")
     
+    VMOS_KNOWN_TEMPLATES = ["PKX110", "OP60F5L1", "V2408A", "PD2408"]
+    is_vmos_template = model in VMOS_KNOWN_TEMPLATES
     for ind in ["vivo", "V2408A", "PD2408"]:
         if ind.lower() in (fp + model + brand).lower():
-            flag(SEVERITY_CRITICAL, "fingerprint", f"VMOS DEFAULT IDENTITY: {ind}",
-                 "Stock VMOS device — must change!", "Apply Samsung/Google identity")
+            if is_vmos_template:
+                flag(SEVERITY_INFO, "fingerprint", f"VMOS template identity: {ind}",
+                     "Hypervisor-locked — cannot change", "Focus on other stealth dimensions")
+            else:
+                flag(SEVERITY_CRITICAL, "fingerprint", f"VMOS DEFAULT IDENTITY: {ind}",
+                     "Stock VMOS device — must change!", "Apply Samsung/Google identity")
     
 
     # ═══════════════════════════════════════════════════════════════

@@ -16,6 +16,7 @@ Usage:
 
 import logging
 import math
+import os
 import random
 import subprocess
 import time
@@ -336,3 +337,71 @@ class SensorSimulator:
                 f"setprop persist.titan.sensor.{sensor}.ts '{int(time.time() * 1000)}'"
             )
         logger.info("Background sensor noise initialized")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# VMOS CLOUD ADAPTER
+# ═══════════════════════════════════════════════════════════════════════
+
+class VMOSSensorAdapter(SensorSimulator):
+    """SensorSimulator variant for VMOS Cloud devices.
+
+    Overrides _sh to route setprop commands through VMOS asyncCmd
+    (synchronous http.client POST) instead of adb subprocess.
+
+    Usage:
+        adapter = VMOSSensorAdapter(pad_code="ACP2509244LGV1MV",
+                                    api_key=AK, api_secret=SK, brand="samsung")
+        adapter.couple_with_gesture("tap", magnitude=0.3)
+        adapter.inject_sensor_burst("accelerometer", duration_ms=150)
+    """
+
+    def __init__(self, pad_code: str, api_key: str = "", api_secret: str = "",
+                 brand: str = "samsung"):
+        super().__init__(adb_target="", brand=brand)
+        self.pad_code = pad_code
+        self._ak = api_key or os.environ.get("VMOS_API_KEY", "")
+        self._sk = api_secret or os.environ.get("VMOS_API_SECRET", "")
+
+    def _sh(self, cmd: str, timeout: int = 15) -> Tuple[bool, str]:
+        """Execute shell command via VMOS asyncCmd API (synchronous)."""
+        import hashlib
+        import hmac
+        import http.client
+        import json as _json
+        import os as _os
+
+        host = _os.environ.get("VMOS_API_HOST", "api.vmoscloud.com")
+        ts = str(int(time.time() * 1000))
+        nonce = str(random.randint(100000, 999999))
+        sign_str = f"{self._ak}{ts}{nonce}{self._sk}"
+        signature = hmac.new(self._sk.encode(), sign_str.encode(), hashlib.sha256).hexdigest()
+
+        headers = {
+            "Content-Type": "application/json",
+            "AppKey": self._ak,
+            "Timestamp": ts,
+            "Nonce": nonce,
+            "Signature": signature,
+            "Service": "armcloud-paas",
+        }
+        body = _json.dumps({
+            "padCode": self.pad_code,
+            "cmd": cmd,
+            "wait": timeout,
+        })
+
+        try:
+            conn = http.client.HTTPSConnection(host, timeout=timeout + 5)
+            conn.request("POST", "/vcpcloud/api/padApi/asyncCmd",
+                         body=body.encode("utf-8"), headers=headers)
+            resp = conn.getresponse()
+            raw = resp.read().decode("utf-8")
+            conn.close()
+            data = _json.loads(raw)
+            return data.get("code") == 200, str(data.get("data", ""))
+        except Exception as e:
+            logger.debug(f"VMOSSensorAdapter._sh failed: {e}")
+            return False, str(e)
+
+

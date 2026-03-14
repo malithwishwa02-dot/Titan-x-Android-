@@ -61,6 +61,10 @@ class VMOSPatchBody(BaseModel):
     lat: float = 40.7128
     lon: float = -74.0060
     wifi_ssid: str = "NETGEAR72-5G"
+    carrier: str = "att_us"
+    location: str = "la"
+    preset: str = "oneplus_ace3"
+    lockdown: bool = True
 
 
 class VMOSInjectBody(BaseModel):
@@ -157,17 +161,17 @@ async def vmos_patch_device(device_id: str, body: VMOSPatchBody):
     dev = dm.get_device(device_id)
     if not bridge or not dev or dev.device_type != "vmos_cloud":
         raise HTTPException(404, "VMOS device not found")
-    result = await bridge.full_stealth_patch(
-        dev.vmos_pad_code,
-        preset={"brand": body.brand, "model": body.model, "device": body.device,
-                "fingerprint": body.fingerprint, "android_version": body.android_version},
-        carrier={"imei": body.imei, "iccid": body.iccid, "imsi": body.imsi, "phone_number": body.phone_number},
-        location={"lat": body.lat, "lon": body.lon},
-        wifi={"ssid": body.wifi_ssid},
+    from vmos_cloud_patcher import VMOSCloudPatcher
+    patcher = VMOSCloudPatcher(bridge, dev.vmos_pad_code)
+    report = await patcher.full_patch(
+        carrier=body.carrier,
+        location=body.location,
+        preset=body.preset,
+        lockdown=body.lockdown,
     )
-    dev.patch_result = result
+    dev.patch_result = report.to_dict()
     dm._save_state()
-    return {"device_id": device_id, "result": result}
+    return {"device_id": device_id, "result": report.to_dict()}
 
 
 @router.post("/{device_id}/inject")

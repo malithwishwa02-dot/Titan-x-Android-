@@ -36,8 +36,14 @@ VMOS_API_SECRET = os.environ.get("VMOS_API_SECRET", "")
 VMOS_API_HOST = os.environ.get("VMOS_API_HOST", "api.vmoscloud.com")
 VMOS_SERVICE = "armcloud-paas"
 
-TASK_POLL_INTERVAL = 2.0   # seconds between task status polls
-TASK_POLL_TIMEOUT = 60.0   # max seconds to wait for async task
+TASK_POLL_INTERVAL = 1.5   # initial seconds between task status polls
+TASK_POLL_MAX_INTERVAL = 5.0  # max poll interval (backoff cap)
+TASK_POLL_TIMEOUT = 120.0  # max seconds to wait for async task
+
+HTTP_MAX_RETRIES = 3        # max retries on transport-level failures
+HTTP_RETRY_BASE = 2.0       # base delay for exponential backoff
+CIRCUIT_BREAKER_THRESHOLD = 5  # consecutive failures before pause
+CIRCUIT_BREAKER_PAUSE = 30.0   # seconds to pause on circuit break
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -160,67 +166,130 @@ class VMOSCloudBridge:
             "authorization": auth,
         }
 
+    _consecutive_failures: int = 0
+    _circuit_open_until: float = 0.0
+
     async def _post(self, path: str, body: dict) -> dict:
         """POST to VMOS Cloud API with HMAC-SHA256 auth.
         Uses http.client as primary transport — urllib/httpx get 500s from
         TencentEdgeOne CDN due to header handling differences.
+
+        Includes exponential backoff retry on transport-level failures (500,
+        timeout, connection reset) and a circuit breaker for cascading failures.
         """
-        body_str = json.dumps(body, separators=(",", ":"))
-        headers = self._sign_request(body_str)
+        # Circuit breaker check
+        if time.time() < self._circuit_open_until:
+            wait = self._circuit_open_until - time.time()
+            logger.warning(f"VMOS circuit breaker open, waiting {wait:.0f}s")
+            await asyncio.sleep(wait)
 
-        # http.client works reliably through TencentEdgeOne CDN
-        import http.client as _hc
-        try:
-            conn = _hc.HTTPSConnection(VMOS_API_HOST, timeout=30)
-            conn.request("POST", path, body=body_str.encode("utf-8"), headers=headers)
-            resp = conn.getresponse()
-            raw = resp.read().decode("utf-8")
-            conn.close()
-            data = json.loads(raw)
-        except Exception as e:
-            logger.warning(f"VMOS API http.client failed: {path} -> {e}")
-            # Fallback to httpx/urllib
-            url = f"{self.base_url}{path}"
+        last_exc = None
+        for attempt in range(HTTP_MAX_RETRIES + 1):
+            # Re-sign on each attempt (timestamp freshness)
+            body_str = json.dumps(body, separators=(",", ":"))
+            headers = self._sign_request(body_str)
+
+            # http.client — primary transport through TencentEdgeOne CDN
+            import http.client as _hc
             try:
-                import httpx
-                client = self._get_http()
-                if client:
-                    resp = await client.post(url, content=body_str.encode("utf-8"), headers=headers)
-                    data = resp.json()
-                else:
-                    raise ImportError("httpx client not available")
-            except ImportError:
-                import urllib.request
-                req = urllib.request.Request(url, data=body_str.encode("utf-8"), headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = json.loads(resp.read().decode())
+                conn = _hc.HTTPSConnection(VMOS_API_HOST, timeout=30)
+                conn.request("POST", path, body=body_str.encode("utf-8"), headers=headers)
+                resp = conn.getresponse()
+                status_code = resp.status
+                raw = resp.read().decode("utf-8")
+                conn.close()
 
-        if data.get("code") != 200:
-            logger.warning(f"VMOS API error: {path} -> {data.get('code')} {data.get('msg')}")
-        return data
+                # Retry on server-side 500 errors (CDN/SNAT exhaustion)
+                if status_code >= 500 and attempt < HTTP_MAX_RETRIES:
+                    delay = HTTP_RETRY_BASE * (2 ** attempt)
+                    logger.warning(f"VMOS API {path} returned {status_code}, retry {attempt+1}/{HTTP_MAX_RETRIES} in {delay:.1f}s")
+                    await asyncio.sleep(delay)
+                    continue
+
+                data = json.loads(raw)
+                self._consecutive_failures = 0
+                if data.get("code") != 200:
+                    logger.warning(f"VMOS API error: {path} -> {data.get('code')} {data.get('msg')}")
+                return data
+
+            except Exception as e:
+                last_exc = e
+                if attempt < HTTP_MAX_RETRIES:
+                    delay = HTTP_RETRY_BASE * (2 ** attempt)
+                    logger.warning(f"VMOS API http.client failed: {path} -> {e}, retry {attempt+1}/{HTTP_MAX_RETRIES} in {delay:.1f}s")
+                    await asyncio.sleep(delay)
+                    continue
+
+                # Final fallback: httpx/urllib (single attempt)
+                logger.warning(f"VMOS API http.client exhausted retries: {path} -> {e}, trying fallback")
+                url = f"{self.base_url}{path}"
+                try:
+                    import httpx
+                    client = self._get_http()
+                    if client:
+                        resp = await client.post(url, content=body_str.encode("utf-8"), headers=headers)
+                        data = resp.json()
+                        self._consecutive_failures = 0
+                        if data.get("code") != 200:
+                            logger.warning(f"VMOS API error: {path} -> {data.get('code')} {data.get('msg')}")
+                        return data
+                    raise ImportError("httpx client not available")
+                except (ImportError, Exception):
+                    try:
+                        import urllib.request
+                        req = urllib.request.Request(url, data=body_str.encode("utf-8"), headers=headers, method="POST")
+                        with urllib.request.urlopen(req, timeout=15) as resp:
+                            data = json.loads(resp.read().decode())
+                            self._consecutive_failures = 0
+                            return data
+                    except Exception as e2:
+                        last_exc = e2
+
+        # All retries exhausted — trip circuit breaker
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+            self._circuit_open_until = time.time() + CIRCUIT_BREAKER_PAUSE
+            logger.error(f"VMOS circuit breaker OPEN after {self._consecutive_failures} failures, pausing {CIRCUIT_BREAKER_PAUSE}s")
+        raise ConnectionError(f"VMOS API {path} failed after {HTTP_MAX_RETRIES+1} attempts: {last_exc}")
 
     # ─── TASK POLLING ────────────────────────────────────────────────
 
     async def _wait_for_task(self, task_id: int, pad_code: str = "") -> VMOSTaskResult:
-        """Poll task status until complete or timeout."""
+        """Poll task status until complete or timeout.
+        Uses exponential backoff: starts at TASK_POLL_INTERVAL, caps at TASK_POLL_MAX_INTERVAL.
+        Detects application-level code=500 'System is busy' and backs off extra aggressively."""
         start = time.time()
+        interval = TASK_POLL_INTERVAL
         while time.time() - start < TASK_POLL_TIMEOUT:
-            data = await self._post("/vcpcloud/api/padApi/padTaskDetail", {
-                "taskIds": [task_id]
-            })
-            tasks = data.get("data", [])
-            if tasks:
-                t = tasks[0]
-                status = t.get("taskStatus", 0)
-                if status >= 3:  # 3=success, 4+=failed
-                    return VMOSTaskResult(
-                        task_id=task_id,
-                        pad_code=t.get("padCode", pad_code),
-                        status=status,
-                        result=t.get("taskResult", ""),
-                        error=t.get("errorMsg", "") or t.get("taskContent", ""),
-                    )
-            await asyncio.sleep(TASK_POLL_INTERVAL)
+            try:
+                data = await self._post("/vcpcloud/api/padApi/padTaskDetail", {
+                    "taskIds": [task_id]
+                })
+                # Application-level rate-limit: code=500 / "System is busy"
+                app_code = data.get("code", 200)
+                app_msg = str(data.get("msg", "")).lower()
+                if app_code == 500 or "busy" in app_msg:
+                    busy_wait = min(interval * 2.5, 20.0)
+                    logger.debug(f"Task {task_id} poll: API busy, backing off {busy_wait:.1f}s")
+                    await asyncio.sleep(busy_wait)
+                    interval = min(interval * 1.5, TASK_POLL_MAX_INTERVAL)
+                    continue
+                tasks = data.get("data", [])
+                if tasks:
+                    t = tasks[0]
+                    status = t.get("taskStatus", 0)
+                    if status >= 3:  # 3=success, 4+=failed
+                        return VMOSTaskResult(
+                            task_id=task_id,
+                            pad_code=t.get("padCode", pad_code),
+                            status=status,
+                            result=t.get("taskResult", ""),
+                            error=t.get("errorMsg", "") or t.get("taskContent", ""),
+                        )
+            except ConnectionError:
+                logger.warning(f"Task poll failed for {task_id}, will retry")
+            await asyncio.sleep(interval)
+            interval = min(interval * 1.5, TASK_POLL_MAX_INTERVAL)
 
         return VMOSTaskResult(
             task_id=task_id, pad_code=pad_code,
@@ -228,10 +297,33 @@ class VMOSCloudBridge:
         )
 
     async def _submit_and_wait(self, path: str, body: dict) -> List[VMOSTaskResult]:
-        """Submit an API call that returns taskIds, wait for all to complete."""
-        data = await self._post(path, body)
+        """Submit an API call that returns taskIds, wait for all to complete.
+        Retries on 110031 (instance not ready) up to 3 times with backoff."""
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            data = await self._post(path, body)
+            code = data.get("code", 0)
+            # 110031 = instance not ready — wait and retry
+            if code == 110031:
+                if attempt < max_retries:
+                    wait = 10 * (attempt + 1)
+                    logger.warning(f"Instance not ready (110031), waiting {wait}s before retry {attempt+1}/{max_retries}")
+                    await asyncio.sleep(wait)
+                    continue
+                else:
+                    return [VMOSTaskResult(status=4, error=f"Instance not ready after {max_retries} retries")]
+            break
+
+        items = data.get("data") or []
+        if not items:
+            # API returned non-200 or empty data
+            msg = data.get("msg", "Unknown error")
+            if code != 200:
+                return [VMOSTaskResult(status=4, error=f"API error {code}: {msg}")]
+            return []
+
         results = []
-        for item in data.get("data", []):
+        for item in items:
             tid = item.get("taskId", 0)
             pc = item.get("padCode", "")
             if tid:
@@ -754,6 +846,95 @@ class VMOSCloudBridge:
 
     # ─── HIGH-LEVEL: FULL PROFILE INJECTION ──────────────────────────
 
+    async def _inject_wallet_db(
+        self,
+        pad_code: str,
+        card_last4: str,
+        card_holder: str = "",
+        issuer: str = "Visa",
+    ) -> bool:
+        """
+        Create tapandpay.db using Python sqlite3 (server-side) and transfer to device
+        via base64 chunked shell echo — sqlite3 binary is NOT available on VMOS Cloud.
+
+        Returns True on success.
+        """
+        import base64, sqlite3, tempfile, os, time
+
+        wallet_dir = "/data/data/com.google.android.apps.walletnfcrel"
+        wallet_db  = f"{wallet_dir}/databases/tapandpay.db"
+        tmp_b64    = "/data/titan/tapandpay.b64"
+        tmp_db     = "/data/titan/tapandpay.db"
+        now_ms     = int(time.time() * 1000)
+        token_id   = f"TOKEN_{card_last4}_{now_ms}"
+
+        # Build the DB locally
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            tmp_local = f.name
+        try:
+            conn = sqlite3.connect(tmp_local)
+            conn.executescript(f"""
+                CREATE TABLE IF NOT EXISTS tokens (
+                    token_id TEXT PRIMARY KEY, last_four TEXT NOT NULL,
+                    issuer_name TEXT NOT NULL DEFAULT '', card_holder TEXT NOT NULL DEFAULT '',
+                    added_timestamp INTEGER NOT NULL DEFAULT 0,
+                    is_default INTEGER NOT NULL DEFAULT 1, token_state INTEGER NOT NULL DEFAULT 2);
+                CREATE TABLE IF NOT EXISTS billing_prefs (
+                    id INTEGER PRIMARY KEY, key TEXT UNIQUE, value TEXT);
+                CREATE VIEW IF NOT EXISTS token_metadata AS
+                    SELECT token_id, last_four, issuer_name, card_holder, added_timestamp FROM tokens;
+                INSERT OR REPLACE INTO tokens VALUES
+                    ('{token_id}','{card_last4}','{issuer}','{card_holder}',{now_ms},1,2);
+                INSERT OR REPLACE INTO billing_prefs (key,value) VALUES
+                    ('billing_client_version','6.2.1'),('nfc_payment_enabled','true');
+            """)
+            conn.commit()
+            conn.close()
+
+            db_b64 = base64.b64encode(open(tmp_local, "rb").read()).decode()
+        finally:
+            try: os.unlink(tmp_local)
+            except: pass
+
+        # Transfer in 800-char chunks
+        await self.exec_shell(pad_code, "mkdir -p /data/titan")
+        chunk = 800
+        for i in range(0, len(db_b64), chunk):
+            op = ">" if i == 0 else ">>"
+            r = await self.exec_shell(pad_code, f"echo '{db_b64[i:i+chunk]}' {op} {tmp_b64}")
+            if not r.ok:
+                logger.warning(f"[{pad_code}] wallet b64 chunk {i} failed")
+                return False
+
+        # Decode and place
+        r = await self.exec_shell(pad_code, f"base64 -d {tmp_b64} > {tmp_db} 2>/dev/null")
+        if not r.ok:
+            logger.warning(f"[{pad_code}] wallet b64 decode failed: {r.error}")
+            return False
+
+        await self.exec_shell(pad_code, f"mkdir -p {wallet_dir}/databases {wallet_dir}/shared_prefs")
+        r = await self.exec_shell(pad_code, f"cp {tmp_db} {wallet_db} && echo ok")
+        if "ok" not in str(r.result or ""):
+            logger.warning(f"[{pad_code}] wallet db copy failed: {r.result}")
+            return False
+
+        # NFC pref files
+        await self.exec_shell(
+            pad_code,
+            f"echo '<map><boolean name=\"nfc_payment_enabled\" value=\"true\"/>"
+            f"<boolean name=\"contactless_payment_enabled\" value=\"true\"/></map>' "
+            f"> {wallet_dir}/shared_prefs/nfc_on_prefs.xml",
+        )
+        await self.exec_shell(
+            pad_code,
+            f"echo '<map><string name=\"default_payment_app\">"
+            f"com.google.android.apps.walletnfcrel</string>"
+            f"<string name=\"billing_client_version\">6.2.1</string></map>' "
+            f"> {wallet_dir}/shared_prefs/default_settings.xml",
+        )
+        logger.info(f"[{pad_code}] Wallet DB injected (card *{card_last4})")
+        return True
+
     async def full_profile_inject(
         self,
         pad_code: str,
@@ -762,10 +943,14 @@ class VMOSCloudBridge:
         sms_messages: List[Dict[str, str]] = None,
         chrome_commands: List[str] = None,
         wallet_commands: List[str] = None,
+        wallet_data: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """
         Full profile data injection using VMOS Cloud APIs.
-        Uses native APIs for contacts/calls/sms, asyncCmd for Chrome/wallet.
+        Uses native APIs for contacts/calls/sms, asyncCmd for Chrome.
+        Wallet: uses server-side sqlite3 + base64 transfer (no sqlite3 on device).
+
+        wallet_data: dict with keys: card_last4, card_holder, issuer (optional)
         """
         results = {}
 
@@ -792,18 +977,30 @@ class VMOSCloudBridge:
                 )
             results["sms"] = {"count": len(sms_messages), "ok": True}
 
-        # 4. Chrome data via shell (asyncCmd)
+        # 4. Chrome data via shell (asyncCmd) — batched, timeouts are non-fatal
         if chrome_commands:
-            logger.info(f"[{pad_code}] Injecting Chrome data via shell...")
+            logger.info(f"[{pad_code}] Injecting Chrome data via shell ({len(chrome_commands)} cmds)...")
+            ok_count = 0
             for cmd in chrome_commands:
                 r = await self.exec_shell(pad_code, cmd)
-                if not r.ok:
+                if r.ok:
+                    ok_count += 1
+                else:
                     logger.warning(f"Chrome inject cmd failed: {r.error}")
-            results["chrome"] = {"commands": len(chrome_commands), "ok": True}
+            results["chrome"] = {"commands": len(chrome_commands), "ok": ok_count > 0}
 
-        # 5. Wallet data via shell (asyncCmd)
-        if wallet_commands:
-            logger.info(f"[{pad_code}] Injecting wallet data via shell...")
+        # 5. Wallet — prefer structured wallet_data (b64 transfer); fall back to shell cmds
+        if wallet_data and wallet_data.get("card_last4"):
+            logger.info(f"[{pad_code}] Injecting wallet DB via base64 transfer...")
+            ok = await self._inject_wallet_db(
+                pad_code,
+                card_last4=wallet_data["card_last4"],
+                card_holder=wallet_data.get("card_holder", ""),
+                issuer=wallet_data.get("issuer", "Visa"),
+            )
+            results["wallet"] = {"method": "b64_transfer", "ok": ok}
+        elif wallet_commands:
+            logger.info(f"[{pad_code}] Injecting wallet data via shell ({len(wallet_commands)} cmds)...")
             for cmd in wallet_commands:
                 r = await self.exec_shell(pad_code, cmd)
                 if not r.ok:

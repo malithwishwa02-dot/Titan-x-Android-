@@ -34,6 +34,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from screen_analyzer import ScreenAnalyzer, ScreenState
 from touch_simulator import TouchSimulator
+from trajectory_logger import TrajectoryLogger
 
 logger = logging.getLogger("titan.device-agent")
 
@@ -46,6 +47,56 @@ CPU_OLLAMA_URL = os.environ.get("TITAN_CPU_OLLAMA", "http://127.0.0.1:11434")
 DEFAULT_MODEL = os.environ.get("TITAN_AGENT_MODEL", "hermes3:8b")
 MAX_STEPS = int(os.environ.get("TITAN_AGENT_MAX_STEPS", "50"))
 STEP_TIMEOUT = int(os.environ.get("TITAN_AGENT_STEP_TIMEOUT", "30"))
+
+# Trained model preferences — auto-detected at startup
+TRAINED_ACTION_MODEL = os.environ.get("TITAN_TRAINED_ACTION", "titan-agent:7b")
+TRAINED_VISION_MODEL = os.environ.get("TITAN_TRAINED_VISION", "titan-screen:7b")
+FALLBACK_ACTION_MODELS = ["hermes3:8b", "dolphin-llama3:8b", "qwen2.5:7b"]
+FALLBACK_VISION_MODELS = ["minicpm-v:8b", "llava:7b", "llava:13b"]
+
+_available_models_cache: Optional[List[str]] = None
+_models_cache_time: float = 0.0
+
+
+def _detect_best_model(ollama_url: str = GPU_OLLAMA_URL,
+                       model_type: str = "action") -> str:
+    """Auto-detect the best available model, preferring trained LoRA models."""
+    global _available_models_cache, _models_cache_time
+    import urllib.request
+
+    # Cache model list for 60 seconds
+    if _available_models_cache is not None and time.time() - _models_cache_time < 60:
+        available = _available_models_cache
+    else:
+        available = []
+        for url in [ollama_url, CPU_OLLAMA_URL]:
+            try:
+                req = urllib.request.Request(f"{url}/api/tags")
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode())
+                    available = [m["name"] for m in data.get("models", [])]
+                    if available:
+                        break
+            except Exception:
+                continue
+        _available_models_cache = available
+        _models_cache_time = time.time()
+
+    if model_type == "vision":
+        preferred = [TRAINED_VISION_MODEL] + FALLBACK_VISION_MODELS
+    else:
+        preferred = [TRAINED_ACTION_MODEL] + FALLBACK_ACTION_MODELS
+
+    for model in preferred:
+        if model in available:
+            return model
+        # Check without tag (e.g. "titan-agent" matches "titan-agent:7b")
+        base = model.split(":")[0]
+        for avail in available:
+            if avail.startswith(base):
+                return avail
+
+    return DEFAULT_MODEL
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -222,29 +273,174 @@ What is the next action? Respond with a single JSON object."""
 # ═══════════════════════════════════════════════════════════════════════
 
 TASK_TEMPLATES = {
-    "browse_url": {
-        "prompt": "Open Chrome browser and navigate to {url}. Wait for the page to load completely.",
-        "params": ["url"],
-    },
-    "create_account": {
-        "prompt": "Go to {url} and create a new account. Use the persona details provided. Fill in all required fields and submit the registration form.",
-        "params": ["url"],
-    },
+    # ── INSTALL ───────────────────────────────────────────────────────
     "install_app": {
-        "prompt": "Open the Google Play Store and search for '{app_name}'. Install the app and wait for installation to complete.",
+        "prompt": "Open the Google Play Store and search for '{app_name}'. Install the app and wait for installation to complete. Once installed, go back to Play Store home.",
         "params": ["app_name"],
+        "category": "install",
+    },
+    "install_batch": {
+        "prompt": "Open Google Play Store and install the following apps one by one: {app_list}. For each app: search by name, tap Install, wait for installation to finish, then go back to Play Store for the next one. Skip any app that requires payment.",
+        "params": ["app_list"],
+        "category": "install",
+    },
+    # ── SIGN-IN ───────────────────────────────────────────────────────
+    "google_signin": {
+        "prompt": "Open Settings, go to Accounts, and add a Google account. Use email {email} and password {password}. Complete any verification steps. Accept all terms.",
+        "params": ["email", "password"],
+        "category": "sign_in",
+    },
+    "chrome_signin": {
+        "prompt": "Open Google Chrome. Tap the profile icon or go to Settings > Sign in. Sign in with Google account {email} and password {password}. Enable sync if prompted.",
+        "params": ["email", "password"],
+        "category": "sign_in",
     },
     "login_app": {
-        "prompt": "Open {app_name} app and log in with email {email} and password {password}.",
+        "prompt": "Open {app_name} app and log in with email {email} and password {password}. Complete any verification or setup steps that appear.",
         "params": ["app_name", "email", "password"],
+        "category": "sign_in",
     },
+    "paypal_signin": {
+        "prompt": "Open PayPal app. Tap 'Log In'. Enter email {email} and password {password}. Complete any security verification. Skip any promotional screens.",
+        "params": ["email", "password"],
+        "category": "sign_in",
+    },
+    "venmo_signin": {
+        "prompt": "Open Venmo app. Tap 'Sign In'. Enter phone number or email {email} and password {password}. Complete verification if asked. Skip any setup prompts.",
+        "params": ["email", "password"],
+        "category": "sign_in",
+    },
+    "cashapp_signin": {
+        "prompt": "Open Cash App. Enter phone number or email {email}. Complete the sign-in flow. Verify with code if needed. Skip optional setup steps.",
+        "params": ["email"],
+        "category": "sign_in",
+    },
+    "bank_app_signin": {
+        "prompt": "Open {app_name} banking app. Tap 'Sign In' or 'Log In'. Enter username {email} and password {password}. Complete any security challenge or biometric prompt. Skip marketing screens.",
+        "params": ["app_name", "email", "password"],
+        "category": "sign_in",
+    },
+    "instagram_signin": {
+        "prompt": "Open Instagram. Tap 'Log In'. Enter username {email} and password {password}. If asked to save login info, tap 'Save'. Skip any popups or notifications prompts.",
+        "params": ["email", "password"],
+        "category": "sign_in",
+    },
+    # ── WALLET ────────────────────────────────────────────────────────
+    "wallet_add_card": {
+        "prompt": "Open Google Wallet (or Google Pay). Tap 'Add to Wallet' or 'Add payment method'. Enter card number {card_number}, expiry {card_exp}, CVV {card_cvv}, cardholder name {card_name}. Accept terms and complete verification if needed.",
+        "params": ["card_number", "card_exp", "card_cvv", "card_name"],
+        "category": "wallet",
+    },
+    "wallet_samsung_pay": {
+        "prompt": "Open Samsung Pay. Tap 'Add card'. Enter card number {card_number}, expiry {card_exp}, CVV {card_cvv}. Accept terms. Complete any bank verification steps.",
+        "params": ["card_number", "card_exp", "card_cvv"],
+        "category": "wallet",
+    },
+    # ── AGING / WARMUP ────────────────────────────────────────────────
     "warmup_device": {
         "prompt": "Open Chrome and browse naturally for 5 minutes. Visit Google, YouTube, and 3 other popular websites. Scroll through content on each site. This is to warm up the device with realistic usage.",
         "params": [],
+        "category": "aging",
+    },
+    "warmup_youtube": {
+        "prompt": "Open YouTube app. Search for '{query}' or browse the home feed. Watch at least 2 videos for 30 seconds each, scrolling the feed between videos. Like one video.",
+        "params": ["query"],
+        "category": "aging",
+    },
+    "warmup_maps": {
+        "prompt": "Open Google Maps. Search for '{location}'. Explore the area, check a restaurant or business listing, look at reviews. Then get directions from current location to that place.",
+        "params": ["location"],
+        "category": "aging",
+    },
+    "warmup_social": {
+        "prompt": "Open {app_name}. Scroll through the main feed for 2-3 minutes. View 3-4 posts. Like one post. Go to the Explore/Discover tab and browse briefly.",
+        "params": ["app_name"],
+        "category": "aging",
+    },
+    "gmail_compose": {
+        "prompt": "Open Gmail. Compose a new email to {to_email} with subject '{subject}' and body '{body}'. Send the email.",
+        "params": ["to_email", "subject", "body"],
+        "category": "aging",
+    },
+    "settings_tweak": {
+        "prompt": "Open Settings. Change the display brightness to about 60%. Go to Sounds and set the ring volume to medium. Go to Display and check the current wallpaper. Go back to home screen.",
+        "params": [],
+        "category": "aging",
+    },
+    # ── BROWSE ────────────────────────────────────────────────────────
+    "browse_url": {
+        "prompt": "Open Chrome browser and navigate to {url}. Wait for the page to load completely.",
+        "params": ["url"],
+        "category": "browse",
     },
     "search_google": {
         "prompt": "Open Chrome, go to google.com, and search for '{query}'. Click on the first organic result and scroll through the page.",
         "params": ["query"],
+        "category": "browse",
+    },
+    "create_account": {
+        "prompt": "Go to {url} and create a new account. Use the persona details provided. Fill in all required fields and submit the registration form.",
+        "params": ["url"],
+        "category": "sign_in",
+    },
+    # ── SOCIAL SIGN-INS ──────────────────────────────────────────────
+    "facebook_signin": {
+        "prompt": "Open Facebook app. Tap 'Log In'. Enter email {email} and password {password}. Tap 'Log In' button. If asked to save login, tap 'OK'. Skip any 'Find Friends' or notification prompts.",
+        "params": ["email", "password"],
+        "category": "sign_in",
+    },
+    "tiktok_signin": {
+        "prompt": "Open TikTok app. Tap 'Profile' tab at bottom. Tap 'Log in'. Choose 'Use phone/email/username'. Enter email {email} and password {password}. Complete any CAPTCHA or verification. Skip onboarding prompts.",
+        "params": ["email", "password"],
+        "category": "sign_in",
+    },
+    "whatsapp_setup": {
+        "prompt": "Open WhatsApp. Enter phone number {phone} when prompted. Verify with SMS code if possible, otherwise wait. Enter display name {name} when asked. Skip backup restoration. Allow contacts access if prompted.",
+        "params": ["phone", "name"],
+        "category": "sign_in",
+    },
+    "telegram_signin": {
+        "prompt": "Open Telegram app. Enter phone number {phone}. Wait for SMS verification code. Enter the code if received. Set display name to {name} if prompted. Skip optional profile photo.",
+        "params": ["phone", "name"],
+        "category": "sign_in",
+    },
+    "snapchat_signin": {
+        "prompt": "Open Snapchat app. Tap 'Log In'. Enter username or email {email} and password {password}. Complete any verification. Skip 'Add Friends' and notification prompts.",
+        "params": ["email", "password"],
+        "category": "sign_in",
+    },
+    "twitter_signin": {
+        "prompt": "Open X (Twitter) app. Tap 'Sign in'. Enter email or username {email}. Enter password {password} on next screen. Skip any 'Turn on notifications' or suggestions prompts.",
+        "params": ["email", "password"],
+        "category": "sign_in",
+    },
+    # ── CRYPTO / COMMERCE ────────────────────────────────────────────
+    "crypto_signin": {
+        "prompt": "Open {app_name} app. Tap 'Sign In' or 'Log In'. Enter email {email} and password {password}. Complete 2FA or email verification if prompted. Skip any promotional screens or tutorials.",
+        "params": ["app_name", "email", "password"],
+        "category": "sign_in",
+    },
+    "amazon_signin": {
+        "prompt": "Open Amazon Shopping app. Tap 'Sign In'. Enter email {email} and password {password}. Complete any CAPTCHA or OTP verification. Skip 'Turn on notifications'. Browse home page briefly.",
+        "params": ["email", "password"],
+        "category": "sign_in",
+    },
+    # ── PLAY STORE / APP MANAGEMENT ──────────────────────────────────
+    "play_purchase": {
+        "prompt": "Open Google Play Store. Search for '{app_name}'. If it has an in-app purchase or paid version, tap 'Buy' or 'Install' (paid). Complete the purchase using the saved payment method. Accept any confirmations.",
+        "params": ["app_name"],
+        "category": "install",
+    },
+    "app_update": {
+        "prompt": "Open Google Play Store. Tap your profile icon (top right). Tap 'Manage apps & device'. Tap 'Updates available'. Update {app_name} if listed, or tap 'Update all'. Wait for updates to finish.",
+        "params": ["app_name"],
+        "category": "install",
+    },
+    # ── NOTIFICATION / PERMISSION HANDLING ───────────────────────────
+    "handle_permissions": {
+        "prompt": "A dialog or permission prompt is visible on screen. If it asks to allow notifications, tap 'Allow'. If it asks for location/camera/contacts permission, tap 'Allow' or 'While using the app'. If it shows a promotional popup, dismiss it by tapping 'No thanks', 'Skip', 'Not now', or the X button. Return to the app's main screen.",
+        "params": [],
+        "category": "aging",
     },
 }
 
@@ -257,16 +453,20 @@ class DeviceAgent:
     """AI-powered autonomous Android device controller."""
 
     def __init__(self, adb_target: str = "127.0.0.1:5555",
-                 model: str = DEFAULT_MODEL,
+                 model: str = "",
                  ollama_url: str = GPU_OLLAMA_URL):
         self.target = adb_target
-        self.model = model
         self.ollama_url = ollama_url
+        # Auto-detect best action model if not explicitly set
+        self.model = model or _detect_best_model(ollama_url, "action")
+        self.vision_model = _detect_best_model(ollama_url, "vision")
         self.analyzer = ScreenAnalyzer(adb_target=adb_target)
         self.touch = TouchSimulator(adb_target=adb_target)
         self._tasks: Dict[str, AgentTask] = {}
         self._threads: Dict[str, threading.Thread] = {}
         self._stop_flags: Dict[str, threading.Event] = {}
+        self._current_traj: Optional[TrajectoryLogger] = None
+        logger.info(f"DeviceAgent init: action={self.model}, vision={self.vision_model}")
 
     # ─── PUBLIC API ───────────────────────────────────────────────────
 
@@ -336,6 +536,14 @@ class DeviceAgent:
         task.status = "running"
         task.started_at = time.time()
 
+        # ── Trajectory logging ──
+        traj = TrajectoryLogger(task_id=task_id, device_id=task.device_id)
+        traj.set_metadata(
+            prompt=task.prompt, model=task.model, persona=task.persona,
+            device_type="vmos_cloud" if "vmos" in task.device_id else "redroid",
+        )
+        self._current_traj = traj
+
         try:
             for step in range(1, task.max_steps + 1):
                 if stop.is_set():
@@ -373,12 +581,16 @@ class DeviceAgent:
             logger.exception(f"Task {task_id} failed")
 
         task.completed_at = time.time()
+        traj.finalize(status=task.status, total_steps=task.steps_taken)
+        self._current_traj = None
         logger.info(f"Task {task_id} finished: {task.status} ({task.steps_taken} steps, "
                      f"{task.completed_at - task.started_at:.1f}s)")
 
     def _execute_step(self, task: AgentTask, step: int) -> AgentAction:
         """Single see→think→act iteration."""
         action = AgentAction(step=step, timestamp=time.time())
+        vision_used = False
+        vision_desc_text = ""
 
         # 1. SEE — capture and analyze screen
         screen = self.analyzer.capture_and_analyze(
@@ -394,6 +606,18 @@ class DeviceAgent:
 
         # 2. THINK — ask LLM for next action
         screen_context = screen.to_llm_context()
+
+        # Vision fallback: when UI dump returns 0 elements (VMOS Cloud case),
+        # use a vision model to describe the screen visually.
+        if len(screen.elements) == 0 and screen.screenshot_b64:
+            vision_desc_text = self._vision_describe_screen(screen.screenshot_b64, task.prompt)
+            if vision_desc_text:
+                vision_used = True
+                screen_context = (
+                    f"[Screen: {screen.width}x{screen.height} | App: {screen.current_app}]\n"
+                    f"[Vision Analysis - UI dump empty, screenshot analyzed by vision model]:\n"
+                    f"{vision_desc_text}"
+                )
 
         # Build action history (last 8 actions)
         history_lines = []
@@ -443,9 +667,73 @@ class DeviceAgent:
         # 4. ACT — execute the action
         action.success = self._execute_action(action)
 
+        # 5. LOG — record step for training data
+        traj = getattr(self, "_current_traj", None)
+        if traj:
+            traj.log_step(
+                step=step,
+                screen_b64=getattr(screen, "screenshot_b64", ""),
+                screen_context=screen_context,
+                screen_width=screen.width,
+                screen_height=screen.height,
+                current_app=getattr(screen, "current_app", ""),
+                element_count=len(screen.elements),
+                vision_used=vision_used,
+                vision_description=vision_desc_text,
+                llm_prompt=prompt,
+                llm_response=llm_response,
+                llm_model=task.model,
+                action=parsed,
+                action_type=action.action_type,
+                action_success=action.success,
+                action_reasoning=action.reasoning,
+            )
+
         logger.info(f"  Step {step}: {action.action_type}({json.dumps(action.params)[:60]}) "
                      f"→ {'OK' if action.success else 'FAIL'}")
         return action
+
+    def _vision_describe_screen(self, screenshot_b64: str, task_hint: str = "") -> str:
+        """Use vision model to describe screen when UIAutomator returns no elements.
+        Sends base64 screenshot to minicpm-v or llava via Ollama /api/generate."""
+        import urllib.request
+        import urllib.error
+
+        vision_models = [self.vision_model] + [m for m in FALLBACK_VISION_MODELS if m != self.vision_model]
+        prompt = (
+            f"Describe this Android phone screen in detail for an AI agent. "
+            f"Current task: {task_hint[:100]}. "
+            "List: 1) What app/screen is shown, 2) All visible buttons and their positions, "
+            "3) Any text fields or input areas, 4) The best next tap coordinates (x,y) to progress the task. "
+            "Be concise and specific about UI element positions."
+        )
+
+        urls_to_try = [self.ollama_url, CPU_OLLAMA_URL]
+        for url in urls_to_try:
+            for model in vision_models:
+                try:
+                    payload = json.dumps({
+                        "model": model,
+                        "prompt": prompt,
+                        "images": [screenshot_b64],
+                        "stream": False,
+                        "options": {"temperature": 0.2, "num_predict": 400},
+                    }).encode()
+                    req = urllib.request.Request(
+                        f"{url}/api/generate",
+                        data=payload,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        data = json.loads(resp.read().decode())
+                        desc = data.get("response", "")
+                        if desc:
+                            logger.debug(f"Vision fallback used ({model}): {desc[:80]}...")
+                            return desc
+                except Exception as e:
+                    logger.debug(f"Vision model {model} at {url} failed: {e}")
+                    continue
+        return ""
 
     def _execute_action(self, action: AgentAction) -> bool:
         """Execute a parsed action via TouchSimulator."""

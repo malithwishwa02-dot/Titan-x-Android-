@@ -29,7 +29,7 @@ logger = logging.getLogger("titan.device-manager")
 
 TITAN_DATA = Path(os.environ.get("TITAN_DATA", "/opt/titan/data"))
 DEVICES_DIR = TITAN_DATA / "devices"
-REDROID_IMAGE = os.environ.get("REDROID_IMAGE", "redroid/redroid:14.0.0-latest")
+REDROID_IMAGE = os.environ.get("REDROID_IMAGE", "redroid-titan:14")
 BASE_ADB_PORT = 5555
 MAX_DEVICES = 8
 CONTAINER_PREFIX = "titan-dev-"
@@ -212,7 +212,7 @@ class DeviceManager:
             f"androidboot.redroid_height={req.screen_height} "
             f"androidboot.redroid_dpi={req.dpi} "
             f"androidboot.redroid_fps=60 "
-            f"androidboot.redroid_gpu_mode=auto "
+            f"androidboot.redroid_gpu_mode=guest "
             f"androidboot.redroid_net_ndns=2 "
             f"androidboot.redroid_net_dns1=8.8.8.8 "
             f"androidboot.redroid_net_dns2=8.8.4.4 "

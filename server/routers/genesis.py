@@ -102,6 +102,8 @@ async def genesis_create(body: GenesisCreateBody):
             country=body.country, archetype=body.archetype, age_days=body.age_days,
             carrier=body.carrier, location=body.location, device_model=body.device_model,
         )
+        pf = _profiles_dir() / f"{profile['id']}.json"
+        pf.write_text(json.dumps(profile))
         return {
             "profile_id": profile["id"],
             "stats": profile["stats"],
@@ -249,10 +251,12 @@ def _convert_profile_to_vmos(profile_data: dict, card_data: Optional[dict] = Non
         lines.append('"')
         chrome_cmds.append("\n".join(lines))
 
-    # History
-    history = profile_data.get("history", [])
+    # History — batched 50 entries per sqlite3 call to stay under VMOS 2KB output buffer
+    CHROME_HISTORY_CAP = 200   # cap total entries for VMOS inject (saves API calls)
+    CHROME_HISTORY_BATCH = 50  # entries per asyncCmd call
+    history = profile_data.get("history", [])[:CHROME_HISTORY_CAP]
     if history:
-        lines = [
+        schema_cmd = (
             f"sqlite3 {chrome_data}/History \""
             "CREATE TABLE IF NOT EXISTS urls ("
             "id INTEGER PRIMARY KEY,url TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',"
@@ -262,39 +266,92 @@ def _convert_profile_to_vmos(profile_data: dict, card_data: Optional[dict] = Non
             "id INTEGER PRIMARY KEY,url INTEGER NOT NULL,visit_time INTEGER NOT NULL,"
             "from_visit INTEGER NOT NULL DEFAULT 0,transition INTEGER NOT NULL DEFAULT 0,"
             "segment_id INTEGER NOT NULL DEFAULT 0,visit_duration INTEGER NOT NULL DEFAULT 0);"
-        ]
-        for idx, entry in enumerate(history, start=1):
-            ts = int(entry.get("timestamp", _time_mod.time()))
-            visit_time = ts * 1000000 + chrome_epoch_offset
-            url = entry.get("url", "").replace("'", "''")
-            title = entry.get("title", "").replace("'", "''")
-            visits = entry.get("visits", 2)
-            lines.append(
-                f"INSERT INTO urls (id,url,title,visit_count,last_visit_time) "
-                f"VALUES ({idx},'{url}','{title}',{visits},{visit_time});"
-            )
-            lines.append(
-                f"INSERT INTO visits (url,visit_time,transition,visit_duration) "
-                f"VALUES ({idx},{visit_time},0,60000000);"
-            )
-        lines.append('"')
-        chrome_cmds.append("\n".join(lines))
+            '"'
+        )
+        chrome_cmds.append(schema_cmd)
+        for batch_start in range(0, len(history), CHROME_HISTORY_BATCH):
+            batch = history[batch_start:batch_start + CHROME_HISTORY_BATCH]
+            lines = [f"sqlite3 {chrome_data}/History \""]
+            for idx, entry in enumerate(batch, start=batch_start + 1):
+                ts = int(entry.get("timestamp", _time_mod.time()))
+                visit_time = ts * 1000000 + chrome_epoch_offset
+                url = entry.get("url", "").replace("'", "''")[:200]
+                title = entry.get("title", "").replace("'", "''")[:100]
+                visits = entry.get("visits", 2)
+                lines.append(
+                    f"INSERT OR IGNORE INTO urls (id,url,title,visit_count,last_visit_time) "
+                    f"VALUES ({idx},'{url}','{title}',{visits},{visit_time});"
+                )
+                lines.append(
+                    f"INSERT OR IGNORE INTO visits (url,visit_time,transition,visit_duration) "
+                    f"VALUES ({idx},{visit_time},0,60000000);"
+                )
+            lines.append('"')
+            chrome_cmds.append("\n".join(lines))
 
     result["chrome_commands"] = chrome_cmds
 
-    # -- Wallet commands
+    # -- Wallet commands (full tapandpay.db schema — matches wallet_provisioner.py for Redroid)
     wallet_cmds: List[str] = []
+    wallet_dir = "/data/data/com.google.android.apps.walletnfcrel"
+    wallet_cmds.append(f"mkdir -p {wallet_dir}/databases {wallet_dir}/shared_prefs")
+
     if card_data and card_data.get("number"):
-        wallet_dir = "/data/data/com.google.android.apps.walletnfcrel"
-        wallet_cmds.append(f"mkdir -p {wallet_dir}/databases {wallet_dir}/shared_prefs")
+        card_last4 = str(card_data["number"])[-4:]
+        card_holder = (card_data.get("cardholder") or profile_data.get("persona_name", "")).replace("'", "''")
+        now_ms = int(_time_mod.time() * 1000)
+        # Full tapandpay.db: tokens table + token_metadata VIEW for compatibility
         wallet_cmds.append(
             f"sqlite3 {wallet_dir}/databases/tapandpay.db \""
-            "CREATE TABLE IF NOT EXISTS cards (id INTEGER PRIMARY KEY, "
-            "card_last4 TEXT, issuer TEXT, added_ts INTEGER);"
-            f"INSERT INTO cards VALUES (1,'{str(card_data['number'])[-4:]}','Visa',"
-            f"{int(_time_mod.time()*1000)});"
+            "CREATE TABLE IF NOT EXISTS tokens ("
+            "token_id TEXT PRIMARY KEY, last_four TEXT NOT NULL, "
+            "issuer_name TEXT NOT NULL DEFAULT '', card_holder TEXT NOT NULL DEFAULT '', "
+            "added_timestamp INTEGER NOT NULL DEFAULT 0, "
+            "is_default INTEGER NOT NULL DEFAULT 1, token_state INTEGER NOT NULL DEFAULT 2);"
+            "CREATE TABLE IF NOT EXISTS billing_prefs ("
+            "id INTEGER PRIMARY KEY, key TEXT UNIQUE, value TEXT);"
+            "CREATE VIEW IF NOT EXISTS token_metadata AS "
+            "SELECT token_id, last_four, issuer_name, card_holder, added_timestamp FROM tokens;"
+            f"INSERT OR REPLACE INTO tokens VALUES ('TOKEN_{card_last4}_{now_ms}','{card_last4}',"
+            f"'Visa','{card_holder}',{now_ms},1,2);"
+            "INSERT OR REPLACE INTO billing_prefs (key,value) VALUES "
+            "('billing_client_version','6.2.1'),"
+            "('nfc_payment_enabled','true'),"
+            "('contactless_enabled','true');"
             '"'
         )
+        # NFC on prefs
+        wallet_cmds.append(
+            f"echo '<map><boolean name=\"nfc_payment_enabled\" value=\"true\"/>"
+            f"<boolean name=\"contactless_payment_enabled\" value=\"true\"/></map>' "
+            f"> {wallet_dir}/shared_prefs/nfc_on_prefs.xml 2>/dev/null"
+        )
+        wallet_cmds.append(
+            f"echo '<map><string name=\"default_payment_app\">com.google.android.apps.walletnfcrel</string>"
+            f"<string name=\"billing_client_version\">6.2.1</string></map>' "
+            f"> {wallet_dir}/shared_prefs/default_settings.xml 2>/dev/null"
+        )
+
+    # Chrome Web Data autofill — inject address + name + email (cross-app coherence)
+    persona_name = profile_data.get("persona_name", "")
+    persona_email = profile_data.get("persona_email", "")
+    if persona_name or persona_email:
+        chrome_web = "/data/data/com.android.chrome/app_chrome/Default/Web Data"
+        now_us = int(_time_mod.time() * 1e6)
+        name_parts = persona_name.split(" ", 1)
+        first = name_parts[0].replace("'", "''")
+        last = (name_parts[1] if len(name_parts) > 1 else "").replace("'", "''")
+        email_esc = persona_email.replace("'", "''")
+        wallet_cmds.append(
+            f"sqlite3 '{chrome_web}' \""
+            "CREATE TABLE IF NOT EXISTS autofill_profiles ("
+            "guid TEXT PRIMARY KEY, origin TEXT, first_name TEXT, last_name TEXT, "
+            "email TEXT, date_modified INTEGER);"
+            f"INSERT OR REPLACE INTO autofill_profiles VALUES ("
+            f"'titan-{now_us}','https://www.google.com','{first}','{last}','{email_esc}',{now_us});"
+            '"'
+        )
+
     result["wallet_commands"] = wallet_cmds
 
     return result
@@ -311,6 +368,15 @@ def _run_inject_job_vmos(job_id: str, pad_code: str, profile_data: dict,
 
         params = _convert_profile_to_vmos(profile_data, card_data)
 
+        # Build structured wallet_data for base64-transfer path (sqlite3 not on VMOS device)
+        wallet_data = None
+        if card_data and card_data.get("number"):
+            wallet_data = {
+                "card_last4": str(card_data["number"])[-4:],
+                "card_holder": card_data.get("cardholder") or profile_data.get("persona_name", ""),
+                "issuer": "Visa",
+            }
+
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(bridge.full_profile_inject(
@@ -319,7 +385,7 @@ def _run_inject_job_vmos(job_id: str, pad_code: str, profile_data: dict,
                 call_logs=params["call_logs"],
                 sms_messages=params["sms_messages"],
                 chrome_commands=params["chrome_commands"],
-                wallet_commands=params["wallet_commands"],
+                wallet_data=wallet_data,
             ))
         finally:
             loop.close()
@@ -643,56 +709,25 @@ async def genesis_age_device(device_id: str, body: AgeDeviceBody):
 
 
 async def _age_device_vmos(device_id: str, dev, body: AgeDeviceBody) -> dict:
-    """Age a VMOS Cloud device via bridge.full_stealth_patch()."""
+    """Age a VMOS Cloud device via VMOSCloudPatcher.full_patch() (shell-based, no NOOP API calls)."""
     try:
-        from device_presets import DEVICE_PRESETS, CARRIERS, LOCATIONS
+        from vmos_cloud_patcher import VMOSCloudPatcher
         bridge = _get_vmos_bridge()
         if not bridge:
             return {"status": "error", "error": "VMOS bridge unavailable", "device_id": device_id}
 
         pad_code = getattr(dev, "vmos_pad_code", "") or device_id
-
-        preset = DEVICE_PRESETS.get(body.preset)
-        carrier = CARRIERS.get(body.carrier)
-        location = LOCATIONS.get(body.location, {})
-
-        preset_dict = {
-            "brand": preset.brand if preset else "samsung",
-            "model": preset.model if preset else "SM-S938U",
-            "device": preset.device if preset else "e3q",
-            "fingerprint": preset.fingerprint if preset else "",
-            "android_version": preset.android_version if preset else "15",
-            "sdk_version": preset.sdk_version if preset else "35",
-            "security_patch": preset.security_patch if preset else "2026-02-05",
-        } if preset else {"brand": "samsung", "model": "SM-S938U", "device": "e3q"}
-
-        carrier_dict = {
-            "mcc": carrier.mcc if carrier else "310",
-            "mnc": carrier.mnc if carrier else "260",
-            "imei": "",
-            "iccid": "",
-            "phone_number": "",
-        }
-
-        location_dict = {
-            "lat": location.get("lat", 40.7580),
-            "lon": location.get("lon", -73.9855),
-        }
-
-        wifi_dict = {
-            "ssid": location.get("wifi", "NETGEAR72-5G"),
-            "mac": "02:00:00:00:00:01",
-            "ip": "192.168.1.100",
-            "gateway": "192.168.1.1",
-        }
-
-        result = await bridge.full_stealth_patch(
-            pad_code, preset=preset_dict, carrier=carrier_dict,
-            location=location_dict, wifi=wifi_dict,
+        patcher = VMOSCloudPatcher(bridge, pad_code)
+        report = await patcher.full_patch(
+            carrier=body.carrier,
+            location=body.location,
+            preset=body.preset,
+            lockdown=True,
         )
         return {
             "status": "complete", "device_id": device_id,
-            "phases": len(result), "report": result,
+            "phases": report.total, "passed": report.passed,
+            "score": report.score, "report": report.to_dict(),
         }
     except Exception as e:
         logger.error("VMOS age-device error: %s", e)

@@ -21,6 +21,7 @@ import io
 import json
 import logging
 import os
+import random
 import re
 import time
 import urllib.request
@@ -62,13 +63,23 @@ def _vmos_post(path: str, body: dict, api_key: str, api_secret: str) -> dict:
         "authorization": f"HMAC-SHA256 Credential={api_key}, SignedHeaders={sh}, Signature={sig}",
     }
 
-    req = urllib.request.Request(url, data=body_bytes, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode())
+        import http.client as _hc
+        conn = _hc.HTTPSConnection(VMOS_HOST, timeout=30)
+        conn.request("POST", path, body=body_bytes, headers=headers)
+        resp = conn.getresponse()
+        raw = resp.read().decode("utf-8")
+        conn.close()
+        return json.loads(raw)
     except Exception as e:
-        logger.warning(f"VMOS API call failed: {path}: {e}")
-        return {"code": -1, "msg": str(e)}
+        # Fallback to urllib
+        try:
+            req = urllib.request.Request(url, data=body_bytes, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return json.loads(resp.read().decode())
+        except Exception as e2:
+            logger.warning(f"VMOS API call failed: {path}: {e2}")
+            return {"code": -1, "msg": str(e2)}
 
 
 def _vmos_shell_sync(pad_code: str, cmd: str, ak: str, sk: str, wait: int = 15) -> str:
@@ -82,7 +93,7 @@ def _vmos_shell_sync(pad_code: str, cmd: str, ak: str, sk: str, wait: int = 15) 
     if r2.get("data"):
         t = r2["data"][0]
         if t.get("taskStatus", 0) >= 3:
-            return (t.get("taskResult") or t.get("errorMsg") or "")[:2000]
+            return (t.get("taskResult") or t.get("errorMsg") or "OK")[:2000]
     return ""
 
 
@@ -93,10 +104,14 @@ def _vmos_shell_sync(pad_code: str, cmd: str, ak: str, sk: str, wait: int = 15) 
 @dataclass
 class VMOSScreenState:
     screenshot_bytes: bytes = b""
+    screenshot_b64: str = ""      # base64 JPEG — populated after capture for vision fallback
     width: int = 1080
     height: int = 2400
     elements: List[Dict] = field(default_factory=list)
     text_blocks: List[str] = field(default_factory=list)
+    all_text: str = ""            # ScreenState-compatible flat text join
+    current_app: str = ""         # ScreenState-compatible foreground package
+    current_activity: str = ""    # ScreenState-compatible foreground activity
     description: str = ""
     error: str = ""
 
@@ -150,6 +165,8 @@ class VMOSScreenAdapter:
             if url:
                 with urllib.request.urlopen(url, timeout=15) as resp:
                     state.screenshot_bytes = resp.read()
+                import base64 as _b64
+                state.screenshot_b64 = _b64.b64encode(state.screenshot_bytes).decode()
                 try:
                     from PIL import Image
                     img = Image.open(io.BytesIO(state.screenshot_bytes))
@@ -169,10 +186,13 @@ class VMOSScreenAdapter:
                     state.elements = self._parse_ui_xml(xml)
                     state.text_blocks = [e["text"] for e in state.elements if e.get("text")]
 
+            state.all_text = " ".join(state.text_blocks)
             if state.text_blocks:
                 state.description = f"Screen shows: {', '.join(state.text_blocks[:5])}"
             else:
                 state.description = f"Screen captured ({state.width}x{state.height})"
+            # Skip dumpsys activity — too slow (5s) for per-step capture; caller can set directly
+            pass
 
         except Exception as e:
             state.error = str(e)
@@ -227,11 +247,18 @@ class VMOSTouchAdapter:
 
     def tap(self, x: int, y: int) -> bool:
         self._rate_limit()
-        return self._shell(f"input tap {x} {y}", 5)
+        jx = x + random.randint(-5, 5)
+        jy = y + random.randint(-5, 5)
+        return self._shell(f"input tap {jx} {jy}", 12)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration: int = 300) -> bool:
         self._rate_limit()
-        return self._shell(f"input swipe {x1} {y1} {x2} {y2} {duration}", 5)
+        jx1 = x1 + random.randint(-3, 3)
+        jy1 = y1 + random.randint(-3, 3)
+        jx2 = x2 + random.randint(-3, 3)
+        jy2 = y2 + random.randint(-3, 3)
+        dur = duration + random.randint(-30, 50)
+        return self._shell(f"input swipe {jx1} {jy1} {jx2} {jy2} {dur}", 12)
 
     def scroll_down(self, amount: int = 800) -> bool:
         cx = self.width // 2
@@ -243,19 +270,19 @@ class VMOSTouchAdapter:
 
     def type_text(self, text: str) -> bool:
         escaped = text.replace("'", "'\\''")
-        return self._shell(f"input text '{escaped}'", 5)
+        return self._shell(f"input text '{escaped}'", 12)
 
     def back(self) -> bool:
-        return self._shell("input keyevent KEYCODE_BACK", 5)
+        return self._shell("input keyevent KEYCODE_BACK", 12)
 
     def home(self) -> bool:
-        return self._shell("input keyevent KEYCODE_HOME", 5)
+        return self._shell("input keyevent KEYCODE_HOME", 12)
 
     def enter(self) -> bool:
-        return self._shell("input keyevent KEYCODE_ENTER", 5)
+        return self._shell("input keyevent KEYCODE_ENTER", 12)
 
     def open_app(self, package: str) -> bool:
-        return self._shell(f"monkey -p {package} -c android.intent.category.LAUNCHER 1", 5)
+        return self._shell(f"monkey -p {package} -c android.intent.category.LAUNCHER 1", 12)
 
     def open_url(self, url: str) -> bool:
         if not url.startswith("http"):

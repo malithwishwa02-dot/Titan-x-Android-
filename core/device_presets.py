@@ -180,6 +180,18 @@ DEVICE_PRESETS: Dict[str, DevicePreset] = {
     ),
 
     # ── OnePlus ───────────────────────────────────────────────────────
+    "oneplus_ace3": DevicePreset(
+        name="OnePlus Ace 3 (VMOS Template)",
+        brand="OnePlus", manufacturer="OnePlus",
+        model="PKX110", device="OP60F5L1", product="PKX110",
+        fingerprint="OnePlus/PKX110/OP60F5L1:15/AP3A.240617.008/V.1a42e08_42cb7b_428e83:user/release-keys",
+        android_version="15", sdk_version="35", security_patch="2024-06-17",
+        build_id="AP3A.240617.008", hardware="qcom", board="sun",
+        bootloader="unknown", baseband="1.0",
+        lcd_density="480", screen_width=1264, screen_height=2780,
+        tac_prefix="86742103", mac_oui="AC:D6:18",
+        gpu_renderer="Adreno (TM) 830", gpu_vendor="ARM", gpu_version="OpenGL ES 3.2 v1.g25p0",
+    ),
     "oneplus_13": DevicePreset(
         name="OnePlus 13",
         brand="OnePlus", manufacturer="OnePlus",
@@ -269,12 +281,12 @@ DEVICE_PRESETS: Dict[str, DevicePreset] = {
         gpu_renderer="Mali-G57 MC3", gpu_vendor="ARM", gpu_version="OpenGL ES 3.2 v1.r32p1",
     ),
     "vivo_x200": DevicePreset(
-        name="Vivo X200 Pro",
+        name="Vivo V2408A (VMOS Template Legacy)",
         brand="vivo", manufacturer="vivo",
-        model="V2426", device="PD2426", product="PD2426",
-        fingerprint="vivo/PD2426/PD2426:15/AP4A.250205.004/compiler1201131547:user/release-keys",
-        android_version="15", sdk_version="35", security_patch="2025-02-05",
-        build_id="AP4A.250205.004", hardware="mt6991", board="mt6991",
+        model="V2408A", device="PD2408", product="PD2408",
+        fingerprint="vivo/PD2408/PD2408:15/AP3A.240905.015.A2/compiler2:user/release-keys",
+        android_version="15", sdk_version="35", security_patch="2024-09-05",
+        build_id="AP3A.240905.015.A2", hardware="mt6985", board="mt6985",
         bootloader="unknown", baseband="MOLY.LR15A.R3.MP",
         lcd_density="480", screen_width=1260, screen_height=2800,
         tac_prefix="86454004", mac_oui="D0:17:69",
