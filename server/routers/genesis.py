@@ -516,10 +516,32 @@ async def genesis_trust_score(device_id: str):
     checks["gallery"] = {"count": gallery_n, "weight": 5}
     if gallery_n >= 3: score += 5
 
-    # 6. Google Pay wallet data
-    has_wallet = bool(dm_shell(t, "ls /data/data/com.google.android.apps.walletnfcrel/databases/tapandpay.db 2>/dev/null"))
-    checks["google_pay"] = {"present": has_wallet, "weight": 12}
-    if has_wallet: score += 12
+    # 6. Google Pay wallet data — deep check (schema + token count)
+    tapandpay_path = "/data/data/com.google.android.apps.walletnfcrel/databases/tapandpay.db"
+    has_wallet = bool(dm_shell(t, f"ls {tapandpay_path} 2>/dev/null"))
+    wallet_tokens = 0
+    if has_wallet:
+        token_raw = dm_shell(t, f"sqlite3 {tapandpay_path} 'SELECT COUNT(*) FROM tokens' 2>/dev/null")
+        try: wallet_tokens = int(token_raw.strip()) if token_raw and token_raw.strip().isdigit() else 0
+        except ValueError: wallet_tokens = 0
+    wallet_valid = has_wallet and wallet_tokens > 0
+    checks["google_pay"] = {"present": has_wallet, "tokens": wallet_tokens, "valid": wallet_valid, "weight": 12}
+    if wallet_valid: score += 12
+
+    # 6b. NFC prefs (tap-and-pay ready)
+    nfc_prefs = dm_shell(t, "cat /data/data/com.google.android.apps.walletnfcrel/shared_prefs/nfc_on_prefs.xml 2>/dev/null")
+    has_nfc = "nfc_enabled" in (nfc_prefs or "")
+    checks["nfc_tap_pay"] = {"present": has_nfc, "weight": 0}
+
+    # 6c. GMS billing state
+    gms_wallet = dm_shell(t, "cat /data/data/com.google.android.gms/shared_prefs/wallet_instrument_prefs.xml 2>/dev/null")
+    has_gms_billing = "wallet_setup_complete" in (gms_wallet or "")
+    checks["gms_billing_sync"] = {"present": has_gms_billing, "weight": 0}
+
+    # 6d. Keybox loaded
+    keybox_prop = dm_shell(t, "getprop persist.titan.keybox.loaded")
+    has_keybox = keybox_prop.strip() == "1" if keybox_prop else False
+    checks["keybox"] = {"loaded": has_keybox, "weight": 0}
 
     # 7. Play Store library
     has_library = bool(dm_shell(t, "ls /data/data/com.android.vending/databases/library.db 2>/dev/null"))
@@ -757,10 +779,17 @@ async def _trust_score_vmos(device_id: str, dev) -> dict:
     checks["gallery"] = {"count": gallery_n, "weight": 5}
     if gallery_n >= 3: score += 5
 
-    # 6. Google Pay
-    has_wallet = bool(await sh("ls /data/data/com.google.android.apps.walletnfcrel/databases/tapandpay.db 2>/dev/null"))
-    checks["google_pay"] = {"present": has_wallet, "weight": 12}
-    if has_wallet: score += 12
+    # 6. Google Pay — deep check (schema + token count)
+    tapandpay_path = "/data/data/com.google.android.apps.walletnfcrel/databases/tapandpay.db"
+    has_wallet = bool(await sh(f"ls {tapandpay_path} 2>/dev/null"))
+    wallet_tokens = 0
+    if has_wallet:
+        token_raw = await sh(f"sqlite3 {tapandpay_path} 'SELECT COUNT(*) FROM tokens' 2>/dev/null")
+        try: wallet_tokens = int(token_raw.strip()) if token_raw and token_raw.strip().isdigit() else 0
+        except ValueError: wallet_tokens = 0
+    wallet_valid = has_wallet and wallet_tokens > 0
+    checks["google_pay"] = {"present": has_wallet, "tokens": wallet_tokens, "valid": wallet_valid, "weight": 12}
+    if wallet_valid: score += 12
 
     # 7. Play Store library
     has_library = bool(await sh("ls /data/data/com.android.vending/databases/library.db 2>/dev/null"))

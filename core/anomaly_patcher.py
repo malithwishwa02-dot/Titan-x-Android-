@@ -561,6 +561,128 @@ class AnomalyPatcher:
         for prop, val in gms_props.items():
             self._record(f"gms:{prop}", True, val)
 
+    # ─── PHASE 11b: KEYBOX INJECTION (Play Integrity Strong) ────────
+
+    def _patch_keybox(self):
+        """Inject hardware keybox.xml for Play Integrity Strong attestation.
+
+        Reads keybox from TITAN_KEYBOX_PATH (default: /opt/titan/data/keybox.xml)
+        and pushes to TrickyStore + PlayIntegrityFork module paths on device.
+        Without a valid, non-revoked keybox, Play Integrity Strong will fail
+        and Google Pay NFC transactions will be rejected.
+        """
+        logger.info("Phase 11b: Keybox injection (Play Integrity Strong)")
+
+        keybox_path = os.environ.get("TITAN_KEYBOX_PATH", "/opt/titan/data/keybox.xml")
+        if not os.path.isfile(keybox_path):
+            logger.warning(f"Keybox not found at {keybox_path} — Play Integrity Strong will fail")
+            self._record("keybox_loaded", False, f"not found: {keybox_path}")
+            return
+
+        # Compute hash for verification
+        with open(keybox_path, "rb") as f:
+            kb_hash = hashlib.sha256(f.read()).hexdigest()[:16]
+
+        # Push keybox to all known framework paths on device
+        device_paths = [
+            "/data/adb/tricky_store/keybox.xml",          # TrickyStore
+            "/data/adb/modules/playintegrityfix/keybox.xml",  # PlayIntegrityFork
+            "/data/adb/modules/tricky_store/keybox.xml",  # TrickyStore (module variant)
+        ]
+
+        pushed = 0
+        for dp in device_paths:
+            parent = dp.rsplit("/", 1)[0]
+            self._sh(f"mkdir -p {parent}")
+            try:
+                r = subprocess.run(
+                    ["adb", "-s", self.target, "push", keybox_path, dp],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if r.returncode == 0:
+                    pushed += 1
+                    # Set restrictive perms
+                    self._sh(f"chmod 600 {dp}")
+            except Exception as e:
+                logger.debug(f"Keybox push to {dp} failed: {e}")
+
+        # Set props for status tracking
+        self._batch_setprop({
+            "persist.titan.keybox.loaded": "1" if pushed > 0 else "0",
+            "persist.titan.keybox.hash": kb_hash,
+            "persist.titan.keybox.paths": str(pushed),
+        })
+
+        success = pushed > 0
+        self._record("keybox_loaded", success, f"hash={kb_hash}, paths={pushed}/{len(device_paths)}")
+        if success:
+            logger.info(f"  Keybox injected: hash={kb_hash}, {pushed} paths")
+        else:
+            logger.error("  Keybox push failed to all paths")
+
+    # ─── PHASE 11c: GSF FINGERPRINT ALIGNMENT ────────────────────────
+
+    def _patch_gsf_alignment(self, preset: DevicePreset):
+        """Synchronize Google Services Framework identity for ecosystem coherence.
+
+        Aligns CheckinService, GservicesSettings, and GMS shared_prefs with
+        the device's android_id and fingerprint. Prevents Google backend from
+        detecting identity mismatches during cloud sync / Play Integrity.
+        """
+        logger.info("Phase 11c: GSF fingerprint alignment")
+
+        # Read current android_id
+        _, aid_raw = self._sh("settings get secure android_id")
+        android_id = aid_raw.strip() if aid_raw.strip() and aid_raw.strip() != "null" else secrets.token_hex(8)
+
+        # Generate GSF device ID (16-hex, typically matches android_id)
+        gsf_device_id = android_id
+
+        now_ms = str(int(time.time() * 1000))
+        gms_prefs_dir = "/data/data/com.google.android.gms/shared_prefs"
+
+        # ── CheckinService.xml: deviceId + lastCheckinTimeMs ──
+        checkin_xml = (
+            "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
+            "<map>\n"
+            f"    <string name=\"deviceId\">{gsf_device_id}</string>\n"
+            f"    <long name=\"lastCheckinTimeMs\" value=\"{now_ms}\" />\n"
+            f"    <string name=\"digest\">1-{secrets.token_hex(20)}</string>\n"
+            "</map>"
+        )
+
+        # ── GservicesSettings.xml: android_id + fingerprint ──
+        gsettings_xml = (
+            "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
+            "<map>\n"
+            f"    <string name=\"android_id\">{android_id}</string>\n"
+            f"    <string name=\"digest\">1-{secrets.token_hex(20)}</string>\n"
+            f"    <long name=\"lastSyncTimeMs\" value=\"{now_ms}\" />\n"
+            "</map>"
+        )
+
+        # Write both prefs via echo (avoids needing tmp file push)
+        self._sh(f"mkdir -p {gms_prefs_dir}", timeout=5)
+
+        checkin_esc = checkin_xml.replace("'", "'\\''")
+        gsettings_esc = gsettings_xml.replace("'", "'\\''")
+
+        self._sh(f"echo '{checkin_esc}' > {gms_prefs_dir}/CheckinService.xml", timeout=10)
+        self._sh(f"echo '{gsettings_esc}' > {gms_prefs_dir}/GservicesSettings.xml", timeout=10)
+
+        # Fix ownership to match GMS package
+        self._sh(
+            f"uid=$(stat -c %U /data/data/com.google.android.gms 2>/dev/null); "
+            f"[ -n \"$uid\" ] && chown $uid:$uid {gms_prefs_dir}/CheckinService.xml "
+            f"{gms_prefs_dir}/GservicesSettings.xml; "
+            f"chmod 660 {gms_prefs_dir}/CheckinService.xml {gms_prefs_dir}/GservicesSettings.xml; "
+            f"restorecon -R {gms_prefs_dir} 2>/dev/null",
+            timeout=10
+        )
+
+        self._record("gsf_checkin_aligned", True, f"deviceId={gsf_device_id}")
+        self._record("gsf_settings_aligned", True, f"android_id={android_id}")
+
     # ─── PHASE 12: SENSOR DATA ───────────────────────────────────────
 
     def _patch_sensors(self, preset: DevicePreset):
@@ -868,12 +990,12 @@ class AnomalyPatcher:
         self._record("persist_init_script", True, "/system/etc/init.d/99-titan-patch.sh")
 
     # ═══════════════════════════════════════════════════════════════════
-    # FULL PATCH PIPELINE (18 phases, 65+ vectors)
+    # FULL PATCH PIPELINE (21 phases, 70+ vectors)
     # ═══════════════════════════════════════════════════════════════════
 
     def full_patch(self, preset_name: str, carrier_name: str, location_name: str,
                    lockdown: bool = False) -> PatchReport:
-        """Run all 19 phases of anomaly patching (65+ vectors).
+        """Run all 21 phases of anomaly patching (70+ vectors).
 
         Args:
             lockdown: If True, conceal ADB and apply final production hardening.
@@ -903,7 +1025,11 @@ class AnomalyPatcher:
         self._patch_network(preset)
         self._patch_gms(preset)
 
-        # New phases 12-18 (12 additional vectors)
+        # Phase 11b-11c: Keybox + GSF alignment (wallet-critical)
+        self._patch_keybox()
+        self._patch_gsf_alignment(preset)
+
+        # Phases 12-18 (additional vectors)
         self._patch_sensors(preset)
         self._patch_bluetooth()
         self._patch_proc_info(preset)
@@ -912,7 +1038,7 @@ class AnomalyPatcher:
         self._patch_wifi_scan(location_name=location_name)
         self._patch_selinux_accessibility()
 
-        # Phase 19: Persist all patches for reboot survival
+        # Phase 21: Persist all patches for reboot survival
         self._persist_patches(preset, carrier, location, locale)
 
         # Optional: ADB concealment for production lockdown
@@ -971,6 +1097,13 @@ class AnomalyPatcher:
         # ADB hidden
         _, adb_val = self._sh("settings get global adb_enabled")
         checks["adb_disabled"] = adb_val.strip() == "0"
+
+        # Keybox
+        checks["keybox_loaded"] = self._getprop("persist.titan.keybox.loaded") == "1"
+
+        # GSF alignment
+        _, gsf_checkin = self._sh("ls /data/data/com.google.android.gms/shared_prefs/CheckinService.xml 2>/dev/null")
+        checks["gsf_aligned"] = bool(gsf_checkin.strip())
 
         passed = sum(1 for v in checks.values() if v)
         total = len(checks)

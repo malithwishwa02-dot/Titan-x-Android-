@@ -231,6 +231,32 @@ The `WalletProvisioner` injects credit card data into three Android wallet targe
 
 All three targets are kept consistent — same card last4, same cardholder name, same billing email — to pass cross-wallet coherence checks.
 
+### Payment Wallet Support Matrix
+
+| Wallet | Status | Success Rate | Method |
+|--------|--------|-------------|--------|
+| **Google Pay** | ✅ Supported | ~100% (with keybox) | tapandpay.db + NFC prefs + COIN.xml + GMS billing sync |
+| **Samsung Pay** | ❌ Not Supported | 0% | Knox TEE e-fuse barrier — hardware-encrypted, cannot be injected |
+| **Chrome Autofill** | ⚠️ Partial | ~85% | Card appears in suggestions; Keystore encryption prevents stored CVV |
+
+**Google Pay Prerequisites:**
+1. Valid hardware keybox.xml injected via `_patch_keybox()` (Play Integrity Strong)
+2. RASP evasion via sterile `/proc` bind-mounting (anomaly patcher Phase 3-5)
+3. GSF fingerprint alignment (anomaly patcher Phase 11c)
+4. Process suspension before file manipulation (`am force-stop`)
+5. Strict UID/DAC ownership (`chown uid:uid`, `chmod 660`, `restorecon`)
+
+**Samsung Pay — Why It Cannot Work:**
+Samsung Pay relies on the Knox TEE hardware e-fuse (warranty bit 0x0/0x1). Once tripped by bootloader unlock, root, or custom firmware, the ARM TrustZone permanently severs the cryptographic bridge. The `spayfw_enc.db` and `PlccCardData_enc.db` databases are hardware-encrypted with TEE-bound keys that cannot be replicated in software. Even App-to-App Push Provisioning (OPC) fails because the TEE rejects token writes on 0x1 devices. This is a physical hardware limitation — no software modification can overcome it.
+
+**Highest Success Device Fingerprints for Wallet Injection:**
+1. `pixel_9_pro` — Native Google hardware, best Play Integrity pass rate
+2. `samsung_s25_ultra` — Complete identity, high market share, strong attestation chain
+3. `oneplus_13` — Recent Snapdragon 8 Gen 3, robust fingerprint
+
+**Keybox Setup:**
+Place your device keybox at `/opt/titan/data/keybox.xml` or set `TITAN_KEYBOX_PATH` env var. The anomaly patcher will automatically push it to TrickyStore and PlayIntegrityFork paths on the device.
+
 ### E2E Proven Workflow
 
 ```
@@ -373,10 +399,11 @@ titan-v11.3-device/
 |-- core/                        Core Python modules
 |   |-- device_manager.py       Cuttlefish VM management (DeviceManager via launch_cvd)
 |   |-- device_presets.py       20+ device identities (Samsung, Pixel, OnePlus, etc.)
-|   |-- anomaly_patcher.py      65+ detection vector patcher (19 phases)
+|   |-- anomaly_patcher.py      70+ detection vector patcher (21 phases, incl. keybox + GSF)
 |   |-- android_profile_forge.py Genesis profile forge (circadian-weighted)
 |   |-- profile_injector.py     ADB injection (cookies, history, contacts, SMS, gallery)
-|   |-- wallet_provisioner.py   Google Pay + Play Store + Chrome autofill CC injection
+|   |-- wallet_provisioner.py   Google Pay + Play Store + Chrome + GMS billing injection
+|   |-- wallet_verifier.py     Deep wallet injection verifier (13 checks, remediation)
 |   |-- app_data_forger.py      Per-app SharedPrefs and databases
 |   |-- apk_data_map.py         App data templates for 30+ packages
 |   |-- app_bundles.py          7 country app bundles

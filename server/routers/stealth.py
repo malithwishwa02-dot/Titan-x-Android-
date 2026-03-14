@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from device_manager import DeviceManager
 from anomaly_patcher import AnomalyPatcher
 from device_presets import CARRIERS, LOCATIONS, list_preset_names
+from wallet_verifier import WalletVerifier
 
 router = APIRouter(prefix="/api/stealth", tags=["stealth"])
 
@@ -67,3 +68,16 @@ async def audit_device(device_id: str):
 
     patcher = AnomalyPatcher(adb_target=dev.adb_target)
     return patcher.audit()
+
+
+@router.get("/{device_id}/wallet-verify")
+async def wallet_verify(device_id: str):
+    """Deep wallet injection verification — 13 checks across Google Pay,
+    Play Store, Chrome, GMS, keybox, GSF alignment, and file ownership."""
+    dev = dm.get_device(device_id)
+    if not dev:
+        raise HTTPException(404, "Device not found")
+
+    verifier = WalletVerifier(adb_target=dev.adb_target)
+    report = verifier.verify()
+    return report.to_dict()

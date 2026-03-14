@@ -287,12 +287,13 @@ class ProfileInjector:
                 persona_email=profile.get("persona_email", ""),
                 persona_name=profile.get("persona_name", ""),
             )
-            self.result.wallet_ok = wallet_result.success_count >= 2
+            self.result.wallet_ok = wallet_result.success_count >= 3
             if wallet_result.errors:
                 self.result.errors.extend(
                     [f"wallet: {e}" for e in wallet_result.errors[:3]]
                 )
-            logger.info(f"  Wallet: {wallet_result.success_count}/3 targets")
+            logger.info(f"  Wallet: {wallet_result.success_count}/4 targets"
+                        f" | verification: {wallet_result.verification.get('score', 'N/A')}")
         except ImportError:
             self.result.errors.append("wallet_provisioner module not found")
         except Exception as e:
