@@ -747,28 +747,30 @@ class ProfileInjector:
     # ─── SMS ──────────────────────────────────────────────────────────
 
     def _inject_sms(self, messages: List[Dict]):
-        """Inject SMS messages via ContentProvider."""
+        """Inject SMS messages via sqlite3 (content provider freezes on Cuttlefish)."""
         if not messages:
             return
 
-        # Cap to 30 entries to avoid ADB timeout
-        capped = messages[:30]
-        count = 0
+        DB = "/data/data/com.android.providers.telephony/databases/mmssms.db"
+        capped = messages[:60]
+        sql_parts = []
         for msg in capped:
-            address = msg.get("address", "")
-            body = msg.get("body", "")
-            msg_type = msg.get("type", 1)  # 1=received, 2=sent
+            address = msg.get("address", "").replace("'", "''")
+            body = msg.get("body", "").replace("'", "''")[:80]
+            msg_type = msg.get("type", 1)
             date_ms = msg.get("date", int(time.time() * 1000) - random.randint(86400000, 604800000))
+            sql_parts.append(
+                f"INSERT INTO sms(address,body,type,date,read,seen) "
+                f"VALUES('{address}','{body}',{msg_type},{date_ms},1,1)"
+            )
 
-            _adb_shell(self.target,
-                f"content insert --uri content://sms "
-                f"--bind address:s:{address} --bind body:s:'{body}' "
-                f"--bind date:l:{date_ms} --bind type:i:{msg_type} "
-                f"--bind read:i:1")
-            count += 1
+        # Batch all inserts in one sqlite3 call
+        if sql_parts:
+            sql_batch = ";".join(sql_parts)
+            _adb_shell(self.target, f'sqlite3 {DB} "{sql_batch}"')
 
-        self.result.sms_injected = count
-        logger.info(f"  SMS: {count} injected")
+        self.result.sms_injected = len(capped)
+        logger.info(f"  SMS: {len(capped)} injected (sqlite3)")
 
     # ─── GALLERY ──────────────────────────────────────────────────────
 
@@ -854,3 +856,29 @@ class ProfileInjector:
         if cmds:
             _adb_shell(self.target, "; ".join(cmds))
             logger.info(f"  Timestamps: backdated {len(paths_to_backdate)} directories")
+
+        # Backdate app install times via pm set-install-time
+        # Without this, 30+ apps all show "installed just now" — a forensic anomaly
+        app_installs = profile.get("app_installs", [])
+        core_packages = [
+            "com.android.chrome", "com.google.android.gms",
+            "com.google.android.gsf", "com.android.vending",
+            "com.google.android.apps.maps", "com.google.android.youtube",
+            "com.google.android.apps.photos",
+        ]
+        install_cmds = []
+        for pkg in core_packages:
+            # Spread install times across profile age window
+            days_back = random.randint(max(1, age_days - 10), age_days)
+            hours_var = random.randint(1, 48)
+            install_ts = int((now - (days_back * 86400) - (hours_var * 3600)) * 1000)
+            install_cmds.append(f"pm set-install-time {pkg} {install_ts} 2>/dev/null")
+        # Also backdate any forged app installs from profile
+        for app in app_installs[:20]:
+            pkg = app.get("package", "")
+            ts = app.get("install_time", 0)
+            if pkg and ts:
+                install_cmds.append(f"pm set-install-time {pkg} {ts} 2>/dev/null")
+        if install_cmds:
+            _adb_shell(self.target, "; ".join(install_cmds))
+            logger.info(f"  Install times: backdated {len(install_cmds)} packages")

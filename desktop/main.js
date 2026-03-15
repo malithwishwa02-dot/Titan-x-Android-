@@ -1,21 +1,27 @@
 const { app, BrowserWindow, Menu, Tray, ipcMain, shell, dialog } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
+
+// ─── Path Resolution (packaged vs dev) ────────────────────────────────
+const IS_PACKAGED = app.isPackaged;
+const RESOURCES = IS_PACKAGED ? process.resourcesPath : path.resolve(__dirname, '..');
+const USER_DATA = app.getPath('userData');        // ~/.config/titan-console
+const TITAN_DATA = path.join(USER_DATA, 'data');
+const VENV_DIR = path.join(USER_DATA, 'venv');
+const SERVER_DIR = path.join(RESOURCES, 'server');
+const CORE_DIR = path.join(RESOURCES, 'core');
+const SETUP_DONE = path.join(USER_DATA, '.setup-done');
 
 // ─── Config ───────────────────────────────────────────────────────────
 const API_PORT = 8080;
 const API_URL = `http://127.0.0.1:${API_PORT}`;
-const TITAN_ROOT = path.resolve(__dirname, '..');
-const VENV_UVICORN = path.join(TITAN_ROOT, 'venv', 'bin', 'uvicorn');
-const UVICORN_CMD = require('fs').existsSync(VENV_UVICORN)
-  ? VENV_UVICORN
-  : 'uvicorn';
 
 let mainWindow = null;
+let setupWindow = null;
 let tray = null;
 let serverProc = null;
-let serverReady = false;
 
 // ─── Prevent duplicate instances ─────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
@@ -23,11 +29,42 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
+    const win = mainWindow || setupWindow;
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      win.focus();
     }
   });
+}
+
+// ─── Utilities ───────────────────────────────────────────────────────
+function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
+
+function findPython() {
+  for (const cmd of ['python3', 'python']) {
+    try {
+      const ver = execSync(`${cmd} --version 2>&1`, { timeout: 5000 }).toString().trim();
+      const match = ver.match(/Python\s+(\d+)\.(\d+)/);
+      if (match && (parseInt(match[1]) > 3 || (parseInt(match[1]) === 3 && parseInt(match[2]) >= 10))) {
+        return { cmd, version: ver };
+      }
+    } catch (_) { /* not found */ }
+  }
+  return null;
+}
+
+function getUvicornCmd() {
+  // Prefer venv uvicorn if it exists
+  const venvUvi = path.join(VENV_DIR, 'bin', 'uvicorn');
+  if (fs.existsSync(venvUvi)) return venvUvi;
+  // Fallback: system-installed or legacy /opt/titan/venv
+  const legacyUvi = path.join(RESOURCES, 'venv', 'bin', 'uvicorn');
+  if (fs.existsSync(legacyUvi)) return legacyUvi;
+  return 'uvicorn';
+}
+
+function isSetupDone() {
+  return fs.existsSync(SETUP_DONE) && fs.existsSync(path.join(VENV_DIR, 'bin', 'uvicorn'));
 }
 
 // ─── Poll until the API server is accepting connections ───────────────
@@ -49,50 +86,160 @@ function waitForServer(retries = 40, interval = 500) {
 
 // ─── Start the uvicorn/FastAPI backend ───────────────────────────────
 function startServer() {
-  // If something is already listening on 8080 (e.g. from systemd), skip.
-  const probe = http.get(API_URL, (res) => {
-    serverReady = true;
-    probe.destroy();
-  });
-  probe.on('error', () => {
-    // Nothing listening — start it ourselves
-    const env = {
-      ...process.env,
-      PYTHONPATH: [
-        path.join(TITAN_ROOT, 'server'),
-        path.join(TITAN_ROOT, 'core'),
-        '/opt/titan/core',
-      ].join(':'),
-    };
-    serverProc = spawn(
-      UVICORN_CMD,
-      [
-        'titan_api:app',
-        '--host', '127.0.0.1',
-        '--port', String(API_PORT),
-        '--workers', '1',
-      ],
-      { cwd: path.join(TITAN_ROOT, 'server'), env, detached: false }
-    );
-    serverProc.stdout.on('data', (d) => console.log('[server]', d.toString().trim()));
-    serverProc.stderr.on('data', (d) => console.error('[server]', d.toString().trim()));
-    serverProc.on('exit', (code) => {
-      if (code !== 0 && code !== null) {
-        dialog.showErrorBox('Titan Server Error',
-          `The backend server exited unexpectedly (code ${code}).\nCheck the terminal for details.`);
-      }
+  return new Promise((resolve) => {
+    // If something is already listening on 8080 (e.g. from systemd), skip.
+    const probe = http.get(API_URL, (res) => {
+      probe.destroy();
+      resolve(true);
     });
+    probe.on('error', () => {
+      // Nothing listening — start it ourselves
+      const env = {
+        ...process.env,
+        PYTHONPATH: [SERVER_DIR, CORE_DIR, '/opt/titan/core'].join(':'),
+        TITAN_DATA,
+        CVD_BIN_DIR: process.env.CVD_BIN_DIR || '/opt/titan/cuttlefish/cf/bin',
+        CVD_HOME_BASE: process.env.CVD_HOME_BASE || '/opt/titan/cuttlefish',
+        CVD_IMAGES_DIR: process.env.CVD_IMAGES_DIR || '/opt/titan/cuttlefish/images',
+      };
+
+      serverProc = spawn(
+        getUvicornCmd(),
+        [
+          'titan_api:app',
+          '--host', '127.0.0.1',
+          '--port', String(API_PORT),
+          '--workers', '1',
+        ],
+        { cwd: SERVER_DIR, env, detached: false }
+      );
+      serverProc.stdout.on('data', (d) => console.log('[server]', d.toString().trim()));
+      serverProc.stderr.on('data', (d) => console.error('[server]', d.toString().trim()));
+      serverProc.on('exit', (code) => {
+        if (code !== 0 && code !== null) {
+          dialog.showErrorBox('Titan Server Error',
+            `The backend server exited unexpectedly (code ${code}).\nCheck the terminal for details.`);
+        }
+      });
+      resolve(false);
+    });
+    probe.setTimeout(2000, () => { probe.destroy(); });
   });
 }
 
-// ─── Create the browser window ───────────────────────────────────────
-async function createWindow() {
+// ─── Setup Window (first-run) ────────────────────────────────────────
+function showSetupWindow() {
+  setupWindow = new BrowserWindow({
+    width: 600,
+    height: 520,
+    title: 'Titan Console — Setup',
+    backgroundColor: '#0a0e17',
+    icon: path.join(__dirname, 'assets', 'icon.png'),
+    resizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+    autoHideMenuBar: true,
+  });
+
+  setupWindow.loadFile(path.join(__dirname, 'setup.html'));
+  setupWindow.on('closed', () => { setupWindow = null; });
+}
+
+// ─── IPC Handlers ────────────────────────────────────────────────────
+ipcMain.handle('setup:getInfo', () => {
+  const python = findPython();
+  const kvmExists = fs.existsSync('/dev/kvm');
+  let adbFound = false;
+  try { execSync('which adb', { timeout: 3000 }); adbFound = true; } catch (_) {}
+  return {
+    python: python ? python : null,
+    kvm: kvmExists,
+    adb: adbFound,
+    venvExists: fs.existsSync(path.join(VENV_DIR, 'bin', 'python3')),
+    dataDir: TITAN_DATA,
+    venvDir: VENV_DIR,
+    isPackaged: IS_PACKAGED,
+  };
+});
+
+ipcMain.handle('setup:run', async (event) => {
+  const python = findPython();
+  if (!python) return { ok: false, error: 'Python 3.10+ not found. Install python3 and try again.' };
+
+  const send = (msg) => {
+    if (setupWindow && !setupWindow.isDestroyed()) {
+      setupWindow.webContents.send('setup:progress', msg);
+    }
+  };
+
+  try {
+    // 1. Create data directories
+    send('Creating data directories...');
+    ensureDir(TITAN_DATA);
+    ensureDir(path.join(TITAN_DATA, 'devices'));
+    ensureDir(path.join(TITAN_DATA, 'profiles'));
+    ensureDir(path.join(TITAN_DATA, 'config'));
+    ensureDir(path.join(TITAN_DATA, 'forge_gallery'));
+
+    // 2. Copy .env if not exists
+    const envPath = path.join(USER_DATA, '.env');
+    if (!fs.existsSync(envPath)) {
+      const envExample = path.join(RESOURCES, '.env.example');
+      if (fs.existsSync(envExample)) {
+        fs.copyFileSync(envExample, envPath);
+        send('Created .env from template');
+      }
+    }
+
+    // 3. Create Python virtual environment
+    send('Creating Python virtual environment...');
+    if (!fs.existsSync(path.join(VENV_DIR, 'bin', 'python3'))) {
+      execSync(`${python.cmd} -m venv "${VENV_DIR}"`, { timeout: 60000 });
+    }
+    send('Virtual environment ready');
+
+    // 4. Install pip dependencies
+    send('Installing Python dependencies (this may take a minute)...');
+    const pipCmd = path.join(VENV_DIR, 'bin', 'pip');
+    const reqFile = path.join(RESOURCES, 'server', 'requirements.txt');
+    if (fs.existsSync(reqFile)) {
+      execSync(`"${pipCmd}" install --upgrade pip -q`, { timeout: 120000 });
+      execSync(`"${pipCmd}" install -r "${reqFile}" -q`, { timeout: 300000 });
+    }
+    send('Dependencies installed');
+
+    // 5. Mark setup as done
+    fs.writeFileSync(SETUP_DONE, JSON.stringify({
+      version: '11.3.2',
+      python: python.version,
+      timestamp: new Date().toISOString(),
+    }));
+    send('Setup complete!');
+    return { ok: true };
+  } catch (err) {
+    send('Error: ' + err.message);
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('setup:launch', async () => {
+  // Close setup window, start server, open main console
+  if (setupWindow) setupWindow.close();
+  startServer();
+  await createMainWindow();
+});
+
+// ─── Main Console Window ─────────────────────────────────────────────
+async function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: 'Titan V11.3 — Android Console',
+    title: 'Titan V11.3 — Cuttlefish Android Console',
     backgroundColor: '#0a0e17',
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
@@ -126,7 +273,7 @@ async function createWindow() {
     <body>
       <div class="logo">T</div>
       <h1>Titan V11.3</h1>
-      <p>Starting backend server…</p>
+      <p>Starting Cuttlefish backend server…</p>
       <div class="spinner"></div>
     </body>
     </html>
@@ -170,11 +317,11 @@ async function createWindow() {
 // ─── System tray ─────────────────────────────────────────────────────
 function createTray() {
   const iconPath = path.join(__dirname, 'assets', 'tray.png');
-  if (!require('fs').existsSync(iconPath)) return; // skip if no icon
+  if (!fs.existsSync(iconPath)) return;
   tray = new Tray(iconPath);
-  tray.setToolTip('Titan V11.3 Console');
+  tray.setToolTip('Titan V11.3 Cuttlefish Console');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open Console', click: () => { if (mainWindow) mainWindow.show(); else createWindow(); } },
+    { label: 'Open Console', click: () => { if (mainWindow) mainWindow.show(); else createMainWindow(); } },
     { type: 'separator' },
     { label: 'Quit Titan', click: () => app.quit() },
   ]));
@@ -182,10 +329,17 @@ function createTray() {
 }
 
 // ─── App lifecycle ───────────────────────────────────────────────────
-app.whenReady().then(() => {
-  startServer();
-  createWindow();
+app.whenReady().then(async () => {
   createTray();
+
+  if (isSetupDone()) {
+    // Normal launch — start server and show console
+    startServer();
+    await createMainWindow();
+  } else {
+    // First run — show setup wizard
+    showSetupWindow();
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -193,7 +347,10 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  if (BrowserWindow.getAllWindows().length === 0) {
+    if (isSetupDone()) createMainWindow();
+    else showSetupWindow();
+  }
 });
 
 app.on('before-quit', () => {

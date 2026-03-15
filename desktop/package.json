@@ -1,13 +1,20 @@
 {
   "name": "titan-console",
-  "version": "11.3.1",
-  "description": "Titan V11.3 Android Console — Desktop App",
+  "version": "11.3.2",
+  "description": "Titan V11.3 Cuttlefish Android Console — Desktop App",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --linux"
+    "build": "electron-builder --linux",
+    "build:deb": "electron-builder --linux deb",
+    "build:appimage": "electron-builder --linux AppImage",
+    "build:all": "electron-builder --linux deb AppImage"
   },
-  "author": "Titan",
+  "author": {
+    "name": "Titan",
+    "email": "dev@titan.local"
+  },
+  "homepage": "https://github.com/titan/titan-console",
   "license": "UNLICENSED",
   "devDependencies": {
     "electron": "^28.3.3",
@@ -16,18 +23,66 @@
   "build": {
     "appId": "com.titan.console",
     "productName": "Titan Console",
+    "extraResources": [
+      {
+        "from": "../core",
+        "to": "core",
+        "filter": ["**/*.py", "**/*.json", "!__pycache__/**", "!_deprecated/**"]
+      },
+      {
+        "from": "../server",
+        "to": "server",
+        "filter": ["**/*.py", "**/*.txt", "**/*.json", "!__pycache__/**"]
+      },
+      {
+        "from": "../console",
+        "to": "console",
+        "filter": ["**/*", "!**/*.bak"]
+      },
+      {
+        "from": "../scripts",
+        "to": "scripts",
+        "filter": ["**/*.sh", "**/*.py", "!_deprecated/**", "!__pycache__/**"]
+      },
+      {
+        "from": "../.env.example",
+        "to": ".env.example"
+      }
+    ],
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
       "category": "Development",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "desktop": {
+        "Name": "Titan Console",
+        "Comment": "Titan V11.3 Cuttlefish Android Console",
+        "Keywords": "titan;android;cuttlefish;antidetect;console;",
+        "StartupWMClass": "titan-console"
+      }
+    },
+    "deb": {
+      "depends": [
+        "python3 (>= 3.10)",
+        "python3-venv",
+        "python3-pip",
+        "adb"
+      ],
+      "afterInstall": "scripts/postinstall.sh",
+      "fpm": ["--name", "titan-console"]
+    },
+    "appImage": {
+      "artifactName": "Titan-Console-${version}-${arch}.AppImage"
     },
     "files": [
       "main.js",
       "preload.js",
-      "assets/**"
+      "setup.js",
+      "setup.html",
+      "assets/**",
+      "package.json"
     ]
   }
 }

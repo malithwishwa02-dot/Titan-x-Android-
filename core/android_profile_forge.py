@@ -316,6 +316,27 @@ def _circadian_hour(rng: random.Random, weights: Optional[List[float]] = None) -
     return rng.choices(range(24), weights=weights, k=1)[0]
 
 
+def _apply_weekend_multiplier(weights: List[float], is_weekend: bool) -> List[float]:
+    """Apply weekend multiplier to circadian weights.
+
+    Weekends: lower early morning (sleeping in), boost late evening (leisure).
+    Weekdays: boost early morning (commute), lower late evening.
+    """
+    if not is_weekend:
+        return weights
+    adjusted = list(weights)
+    # Hours 6-9: lower weight on weekends (sleeping in) — 0.6x
+    for h in range(6, 10):
+        adjusted[h] *= 0.6
+    # Hours 19-23: higher weight on weekends (leisure) — 1.3x
+    for h in range(19, 24):
+        adjusted[h] *= 1.3
+    # Hours 10-12: slightly higher on weekends (brunch/social) — 1.1x
+    for h in range(10, 13):
+        adjusted[h] *= 1.1
+    return adjusted
+
+
 def _random_datetime(rng: random.Random, base: datetime, days_ago_min: int,
                      days_ago_max: int, weights: Optional[List[float]] = None,
                      tz_offset_hours: float = 0.0) -> datetime:
@@ -326,12 +347,15 @@ def _random_datetime(rng: random.Random, base: datetime, days_ago_min: int,
             Circadian weights are applied in local time.
     """
     day_offset = rng.randint(days_ago_min, days_ago_max)
+    dt = base - timedelta(days=day_offset)
+    # Apply weekend multiplier if date falls on Saturday/Sunday
+    is_weekend = dt.weekday() >= 5  # 5=Saturday, 6=Sunday
+    effective_weights = _apply_weekend_multiplier(weights or CIRCADIAN_WEIGHTS, is_weekend)
     # Pick hour in local time, then convert to UTC
-    local_hour = _circadian_hour(rng, weights)
+    local_hour = _circadian_hour(rng, effective_weights)
     utc_hour = int((local_hour - tz_offset_hours) % 24)
     minute = rng.randint(0, 59)
     second = rng.randint(0, 59)
-    dt = base - timedelta(days=day_offset)
     return dt.replace(hour=utc_hour, minute=minute, second=second)
 
 

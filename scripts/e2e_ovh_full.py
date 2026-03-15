@@ -9,6 +9,7 @@ Targets OVH KS-4 (51.68.33.34):
   - ADB: 127.0.0.1:6520 (Cuttlefish CVD)
   - Device: cvd-ovh-1
 """
+import hashlib
 import json
 import logging
 import os
@@ -74,7 +75,7 @@ def adb(cmd, timeout=15):
 
 
 def sql(db, query):
-    return adb(f'sqlite3 {db} "{query}" 2>/dev/null')
+    return adb(f"sqlite3 '{db}' \"{query}\" 2>/dev/null")
 
 
 def gap(cat, desc):
@@ -242,8 +243,16 @@ else:
     log.info(f"  Stealth: {score}% ({passed}/{total})")
     if failed > 0:
         for r in patch_resp.get("results", []):
-            if not r.get("success"):
+            if isinstance(r, dict) and not r.get("ok"):
                 gap("patch_fail", f"{r.get('name', '?')}: {r.get('detail', '')}")
+    # Log first few failed phases for visibility
+    fail_list = [r for r in patch_resp.get("results", []) if isinstance(r, dict) and not r.get("ok")]
+    if fail_list:
+        log.info(f"  Failed phases ({len(fail_list)}):")
+        for r in fail_list[:10]:
+            log.info(f"    - {r.get('name','?')}: {r.get('detail','')}")
+        if len(fail_list) > 10:
+            log.info(f"    ... and {len(fail_list)-10} more")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -256,19 +265,24 @@ audit_resp, audit_code = api_get(f"/api/stealth/{DEVICE_ID}/audit", timeout=60)
 if audit_code != 200:
     gap("audit", f"API returned {audit_code}: {audit_resp}")
 else:
-    audit_pass = 0
-    audit_total = 0
-    for check in audit_resp.get("checks", []):
-        audit_total += 1
-        name = check.get("name", "?")
-        ok = check.get("pass", False)
-        detail = check.get("detail", "")
+    audit_pass = audit_resp.get("passed", 0)
+    audit_total = audit_resp.get("total", 37)
+    audit_score = audit_resp.get("score", 0)
+    checks = audit_resp.get("checks", {})
+    # checks is {"name": bool, ...}
+    # adb_disabled is expected — ADB is intentionally kept on for device management
+    KNOWN_EXCEPTIONS = {"adb_disabled"}
+    for name, ok in checks.items():
         if ok:
-            audit_pass += 1
-            log.info(f"  PASS {name}: {detail}")
+            log.info(f"  PASS {name}")
+        elif name in KNOWN_EXCEPTIONS:
+            log.info(f"  SKIP {name} (known exception: ADB kept on for management)")
         else:
-            gap("audit_fail", f"{name}: {detail}")
-    log.info(f"  Audit: {audit_pass}/{audit_total}")
+            gap("audit_fail", f"{name}")
+    log.info(f"  Audit: {audit_pass}/{audit_total} ({audit_score}%)")
+    if audit_score < 100:
+        failed_checks = [n for n, v in checks.items() if not v]
+        log.info(f"  Failed ({len(failed_checks)}): {', '.join(failed_checks)}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -310,7 +324,7 @@ else:
     log.info(f"  Wallet verify: {wv_pass}/{wv_total}")
     for c in wv_resp.get("checks", []):
         name = c.get("name", "?")
-        ok = c.get("pass", False)
+        ok = c.get("passed", False)
         detail = c.get("detail", "")
         if ok:
             log.info(f"    PASS {name}: {detail}")
@@ -415,7 +429,7 @@ if not hi_n:
 
 # --- 7e. Content providers ---
 log.info("\n[Content] providers")
-sms_n_raw = adb("content query --uri content://sms --projection _id 2>/dev/null | wc -l")
+sms_n_raw = adb("sqlite3 /data/data/com.android.providers.telephony/databases/mmssms.db 'SELECT COUNT(*) FROM sms' 2>/dev/null")
 sms_n = int(sms_n_raw) if sms_n_raw.strip().isdigit() else 0
 log.info(f"  {'PASS' if sms_n >= 5 else 'FAIL'} SMS: {sms_n}")
 if sms_n < 5:
@@ -514,6 +528,87 @@ if len(date_matches) >= 10:
         warn("No Poisson burst clustering detected in call logs")
 else:
     warn(f"Too few call logs ({len(date_matches)}) for burst analysis")
+
+# --- 7l. Storage encryption (Phase 19) ---
+log.info("\n[Storage] encryption masking")
+crypto_state = adb("getprop ro.crypto.state")
+log.info(f"  {'PASS' if crypto_state == 'encrypted' else 'FAIL'} ro.crypto.state={crypto_state}")
+if crypto_state != "encrypted":
+    gap("patch", "ro.crypto.state not encrypted (emulator detection)")
+
+# --- 7m. Process stealth (Phase 20) ---
+log.info("\n[Process] stealth")
+cf_procs = adb("ps -eo args 2>/dev/null | grep -iE 'cuttlefish|cvd_internal' | grep -v grep | grep -vF '['")
+if cf_procs.strip():
+    gap("proc", f"Cuttlefish processes visible: {cf_procs.strip()[:80]}")
+else:
+    log.info("  PASS no cuttlefish/cvd processes visible")
+
+# --- 7n. Audio subsystem (Phase 21) ---
+log.info("\n[Audio] subsystem scrub")
+asound = adb("cat /proc/asound/cards 2>/dev/null")
+if "virtio" in asound.lower():
+    gap("patch", "virtio_snd visible in /proc/asound/cards")
+else:
+    log.info("  PASS /proc/asound/cards clean")
+
+# --- 7o. Input behavior (Phase 22) ---
+log.info("\n[Input] kinematic behavior")
+typing_delay = adb("getprop persist.sys.input.typing_delay")
+touch_jitter = adb("getprop persist.sys.input.touch_jitter")
+log.info(f"  typing_delay={typing_delay} touch_jitter={touch_jitter}")
+if not typing_delay:
+    warn("persist.sys.input.typing_delay not set")
+if not touch_jitter:
+    warn("persist.sys.input.touch_jitter not set")
+
+# --- 7p. Kernel hardening (Phase 23) ---
+log.info("\n[Kernel] execution hardening")
+perf_paranoid = adb("cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null").strip()
+log.info(f"  perf_event_paranoid={perf_paranoid}")
+try:
+    if int(perf_paranoid) < 3:
+        warn(f"perf_event_paranoid={perf_paranoid} (want >=3)")
+except ValueError:
+    warn(f"Cannot read perf_event_paranoid: {perf_paranoid}")
+
+debugfs_mounted = adb("mount | grep debugfs 2>/dev/null").strip()
+if debugfs_mounted:
+    warn("debugfs still mounted (detection surface)")
+else:
+    log.info("  PASS debugfs unmounted")
+
+# --- 7q. IPv6 disable ---
+log.info("\n[Network] IPv6 hardening")
+ip6_policy = adb("ip6tables -L INPUT 2>/dev/null | head -1")
+if "DROP" in ip6_policy:
+    log.info("  PASS IPv6 INPUT policy DROP")
+else:
+    warn("IPv6 not fully disabled (ip6tables INPUT not DROP)")
+
+# --- 7r. Patch persistence ---
+log.info("\n[Persistence] patch hook")
+recovery_sh = adb("cat /system/bin/install-recovery.sh 2>/dev/null")
+service_d = adb("ls /data/adb/service.d/99-titan-patch.sh 2>/dev/null")
+if "99-titan-patch" in recovery_sh:
+    log.info("  PASS install-recovery.sh hook present")
+elif service_d.strip():
+    log.info("  PASS /data/adb/service.d/99-titan-patch.sh present (erofs fallback)")
+else:
+    warn("No patch persistence hook found (install-recovery.sh or service.d)")
+
+# --- 7s. GSF MD5 alignment ---
+log.info("\n[GSF] identity alignment")
+android_id = adb("settings get secure android_id").strip()
+checkin_xml = adb("cat /data/data/com.google.android.gms/shared_prefs/CheckinService.xml 2>/dev/null")
+if android_id and "deviceId" in checkin_xml:
+    expected_gsf = hashlib.md5(android_id.encode()).hexdigest()[:16]
+    if expected_gsf in checkin_xml:
+        log.info(f"  PASS GSF deviceId=md5(android_id)={expected_gsf}")
+    else:
+        warn(f"GSF deviceId not MD5 of android_id ({expected_gsf})")
+else:
+    warn("Cannot verify GSF alignment (missing data)")
 
 
 # ═══════════════════════════════════════════════════════════════════

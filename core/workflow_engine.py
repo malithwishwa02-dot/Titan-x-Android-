@@ -132,14 +132,23 @@ class WorkflowEngine:
             },
         )
 
-        # Build stage list
+        # Build stage list — ORDER MATTERS:
+        #   0. bootstrap_gapps  — install GMS/Play Store/Chrome/GPay (skip if present)
+        #   1. forge_profile    — generate persona data
+        #   2. install_apps     — via AI agent + Play Store (needs Play Store!)
+        #   3. inject_profile   — push data into apps that now exist
+        #   4. setup_wallet     — needs Google Pay APK installed
+        #   5. patch_device     — stealth masking LAST (bind-mounts /proc)
+        #   6. warmup           — natural usage after all data is in place
+        #   7. verify           — audit + trust + wallet checks
+        job.stages.append(WorkflowStage(name="bootstrap_gapps", method="inject"))
         if not skip_forge and not profile_id:
             job.stages.append(WorkflowStage(name="forge_profile", method="forge"))
+        job.stages.append(WorkflowStage(name="install_apps", method="agent"))
         job.stages.append(WorkflowStage(name="inject_profile", method="inject"))
+        job.stages.append(WorkflowStage(name="setup_wallet", method="inject"))
         if not skip_patch:
             job.stages.append(WorkflowStage(name="patch_device", method="patch"))
-        job.stages.append(WorkflowStage(name="install_apps", method="agent"))
-        job.stages.append(WorkflowStage(name="setup_wallet", method="inject"))
         job.stages.append(WorkflowStage(name="warmup_browse", method="agent"))
         job.stages.append(WorkflowStage(name="warmup_youtube", method="agent"))
         job.stages.append(WorkflowStage(name="verify_report", method="inject"))
@@ -172,7 +181,10 @@ class WorkflowEngine:
                 stage.started_at = time.time()
 
                 try:
-                    if stage.name == "forge_profile":
+                    if stage.name == "bootstrap_gapps":
+                        loop.run_until_complete(
+                            self._stage_bootstrap_gapps(job))
+                    elif stage.name == "forge_profile":
                         loop.run_until_complete(
                             self._stage_forge(job, persona, country, aging))
                     elif stage.name == "inject_profile":
@@ -217,6 +229,33 @@ class WorkflowEngine:
                      f"({job.completed_stages}/{len(job.stages)} stages, {duration:.0f}s)")
 
     # ─── STAGE IMPLEMENTATIONS ───────────────────────────────────────
+
+    async def _stage_bootstrap_gapps(self, job: WorkflowJob):
+        """Stage 0: Install GMS, Play Store, Chrome, Google Pay if missing."""
+        dev = self.dm.get_device(job.device_id) if self.dm else None
+        if not dev:
+            raise RuntimeError(f"Device {job.device_id} not found")
+
+        from gapps_bootstrap import GAppsBootstrap
+        bs = GAppsBootstrap(adb_target=dev.adb_target)
+
+        # Quick check — skip if already bootstrapped
+        status = bs.check_status()
+        if not status["needs_bootstrap"]:
+            logger.info("GApps already installed — skipping bootstrap")
+            return
+
+        result = bs.run(skip_optional=False)
+        if result.missing_apks:
+            logger.warning(f"Missing APKs (place in /opt/titan/data/gapps/): "
+                           f"{result.missing_apks}")
+        if not result.gms_ready or not result.play_store_ready:
+            raise RuntimeError(
+                f"GApps bootstrap incomplete: GMS={result.gms_ready} "
+                f"PlayStore={result.play_store_ready}. "
+                f"Place APKs in /opt/titan/data/gapps/ and retry.")
+        logger.info(f"GApps bootstrap: {len(result.installed)} installed, "
+                     f"{len(result.already_installed)} already present")
 
     async def _stage_forge(self, job: WorkflowJob, persona: Dict,
                            country: str, aging: Dict):
@@ -288,11 +327,26 @@ class WorkflowEngine:
 
         from anomaly_patcher import AnomalyPatcher
         from device_presets import COUNTRY_DEFAULTS
+        from pathlib import Path as _Path
 
         defaults = COUNTRY_DEFAULTS.get(country, COUNTRY_DEFAULTS.get("US", {}))
-        carrier = defaults.get("carrier", "att_us")
+        carrier  = defaults.get("carrier", "att_us")
         location = defaults.get("location", "la")
-        model = dev.config.get("model", "samsung_s25_ultra")
+        model    = dev.config.get("model", "samsung_s25_ultra")
+
+        # Override with genesis profile values so GSM props match the persona's carrier
+        profile_id = job.config.get("profile_id", "")
+        if profile_id:
+            _pf = _Path(os.environ.get("TITAN_DATA", "/opt/titan/data")) / "profiles" / f"{profile_id}.json"
+            if _pf.exists():
+                try:
+                    _pd = json.loads(_pf.read_text())
+                    carrier  = _pd.get("carrier",      carrier)
+                    location = _pd.get("location",     location)
+                    model    = _pd.get("device_model", model)
+                    logger.info(f"Patch using profile values: preset={model} carrier={carrier} location={location}")
+                except Exception as _e:
+                    logger.warning(f"Could not load profile for patch params: {_e}")
 
         patcher = AnomalyPatcher(adb_target=dev.adb_target)
         report = patcher.full_patch(model, carrier, location)

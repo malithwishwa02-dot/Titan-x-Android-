@@ -44,14 +44,15 @@ logger = logging.getLogger("titan.device-agent")
 
 GPU_OLLAMA_URL = os.environ.get("TITAN_GPU_OLLAMA", "http://127.0.0.1:11435")
 CPU_OLLAMA_URL = os.environ.get("TITAN_CPU_OLLAMA", "http://127.0.0.1:11434")
-DEFAULT_MODEL = os.environ.get("TITAN_AGENT_MODEL", "hermes3:8b")
+DEFAULT_MODEL = os.environ.get("TITAN_AGENT_MODEL", "titan-agent:7b")
 MAX_STEPS = int(os.environ.get("TITAN_AGENT_MAX_STEPS", "50"))
 STEP_TIMEOUT = int(os.environ.get("TITAN_AGENT_STEP_TIMEOUT", "30"))
 
 # Trained model preferences — auto-detected at startup
 TRAINED_ACTION_MODEL = os.environ.get("TITAN_TRAINED_ACTION", "titan-agent:7b")
-TRAINED_VISION_MODEL = os.environ.get("TITAN_TRAINED_VISION", "titan-screen:7b")
-FALLBACK_ACTION_MODELS = ["hermes3:8b", "dolphin-llama3:8b", "qwen2.5:7b"]
+TRAINED_SPECIALIST_MODEL = os.environ.get("TITAN_SPECIALIST_MODEL", "titan-specialist:7b")
+TRAINED_VISION_MODEL = os.environ.get("TITAN_TRAINED_VISION", "minicpm-v:8b")
+FALLBACK_ACTION_MODELS = ["titan-specialist:7b", "hermes3:8b", "qwen2.5:7b"]
 FALLBACK_VISION_MODELS = ["minicpm-v:8b", "llava:7b", "llava:13b"]
 
 _available_models_cache: Optional[List[str]] = None

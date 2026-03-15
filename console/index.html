@@ -223,12 +223,69 @@
 
       <!-- Actions -->
       <div class="flex gap-3 flex-wrap">
-        <button @click="forgeAndInject()" :disabled="forging" class="btn-green text-black px-6 py-3 rounded-lg text-sm font-bold disabled:opacity-50"><span x-show="!forging">FORGE + INJECT INTO DEVICE</span><span x-show="forging">Working...</span></button>
-        <button @click="forgeOnly()" :disabled="forging" class="btn-primary text-white px-6 py-3 rounded-lg text-sm font-bold disabled:opacity-50">FORGE ONLY</button>
-        <button @click="previewProfile()" class="btn-secondary text-white px-6 py-3 rounded-lg text-sm font-bold">PREVIEW PROFILE</button>
+        <button x-show="forge.device_id" @click="forgeAndProvision()" :disabled="forging" class="btn-green text-black px-6 py-3 rounded-lg text-sm font-bold disabled:opacity-50 flex items-center gap-2">
+          <span x-show="!forging">&#9889; FORGE + INJECT + PATCH</span>
+          <span x-show="forging">Working...</span>
+        </button>
+        <button @click="forgeAndInject()" :disabled="forging" class="btn-primary text-white px-6 py-3 rounded-lg text-sm font-bold disabled:opacity-50"><span x-show="!forging" x-text="forge.device_id ? 'FORGE + INJECT ONLY' : 'FORGE + INJECT'"></span><span x-show="forging">Working...</span></button>
+        <button @click="forgeOnly()" :disabled="forging" class="btn-secondary text-white px-6 py-3 rounded-lg text-sm font-bold disabled:opacity-50">FORGE ONLY</button>
+        <button @click="previewProfile()" class="btn-secondary text-white px-4 py-3 rounded-lg text-sm font-bold">PREVIEW</button>
       </div>
-      <div class="log-area h-48" x-text="forgeLog||'Enter identity data and click FORGE'"></div>
-      <div x-show="forgeResult" class="grp border-green-800 bg-green-900/20">
+
+      <!-- Provision progress stepper -->
+      <div x-show="provisionJob" class="grp border-cyan-800 bg-cyan-900/10">
+        <div class="flex items-center justify-between mb-3">
+          <h4 class="text-cyan-400 text-xs font-bold uppercase">Provision Pipeline</h4>
+          <span class="text-[10px] font-mono" :class="provisionJob?.status==='completed'?'text-green-400':provisionJob?.status==='failed'?'text-red-400':'text-yellow-400'" x-text="provisionJob?.status?.toUpperCase()||''" ></span>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <template x-for="(s,i) in [{n:1,label:'Forge',key:'forge'},{n:2,label:'Inject',key:'inject'},{n:3,label:'Full Patch',key:'patch'},{n:4,label:'Verify',key:'done'}]" :key="i">
+            <div class="flex items-center gap-1">
+              <div class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold"
+                :class="provisionJob?.step_n > s.n ? 'bg-green-700 text-green-300' : provisionJob?.step_n === s.n ? 'bg-yellow-700 text-yellow-300 animate-pulse' : 'bg-gray-700 text-gray-500'">
+                <span x-text="provisionJob?.step_n > s.n ? '&#10003;' : s.n"></span>
+              </div>
+              <span :class="provisionJob?.step_n >= s.n ? 'text-white' : 'text-gray-600'" x-text="s.label"></span>
+              <span x-show="i < 3" class="text-gray-700 mx-1">&#8594;</span>
+            </div>
+          </template>
+        </div>
+        <div class="text-[11px] text-gray-500 mt-2" x-show="provisionJob?.step==='patch'">
+          Full patch running (26 phases, 103+ vectors)...
+        </div>
+      </div>
+
+      <!-- Provision scorecard -->
+      <div x-show="provisionResult" class="grp border-green-700 bg-green-900/20">
+        <div class="text-green-400 font-bold text-sm mb-3">&#9989; Provision Complete</div>
+        <div class="grid grid-cols-3 gap-4">
+          <div class="text-center">
+            <div class="text-2xl font-bold" :class="(provisionResult?.patch_score||0)>=90?'text-green-400':(provisionResult?.patch_score||0)>=70?'text-yellow-400':'text-red-400'" x-text="(provisionResult?.patch_score||0)+'%'"></div>
+            <div class="text-[10px] text-gray-500 mt-0.5">Stealth Score</div>
+            <div class="text-[10px] text-gray-600" x-text="(provisionResult?.phases_passed||0)+'/'+(provisionResult?.phases_total||0)+' phases'"></div>
+          </div>
+          <div class="text-center">
+            <div class="text-2xl font-bold" :class="(provisionResult?.trust_score||0)>=90?'text-green-400':(provisionResult?.trust_score||0)>=70?'text-yellow-400':'text-red-400'" x-text="(provisionResult?.trust_score||0)+'/100'"></div>
+            <div class="text-[10px] text-gray-500 mt-0.5">Trust Score</div>
+          </div>
+          <div class="text-center">
+            <div class="text-2xl font-bold" :class="provisionResult?.gsm?.ok?'text-green-400':'text-red-400'" x-text="provisionResult?.gsm?.ok ? '&#10003; OK' : '&#10007; FAIL'"></div>
+            <div class="text-[10px] text-gray-500 mt-0.5">GSM / SIM</div>
+            <div class="text-[10px] text-gray-600" x-text="provisionResult?.gsm?.operator ? provisionResult.gsm.operator+' '+provisionResult.gsm.mcc_mnc : ''"></div>
+          </div>
+        </div>
+        <div class="mt-3 text-xs grid grid-cols-2 gap-x-4 gap-y-1 text-gray-400">
+          <template x-for="[k,v] in Object.entries(provisionResult?.trust_checks||{})" :key="k">
+            <div class="flex items-center gap-1">
+              <span :class="v?'text-green-500':'text-red-500'" x-text="v?'&#10003;':'&#10007;"></span>
+              <span x-text="k.replace(/_/g,' ')"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div class="log-area h-32" x-text="forgeLog||'Enter identity data and click FORGE'"></div>
+      <div x-show="forgeResult && !provisionResult" class="grp border-green-800 bg-green-900/20">
         <div class="text-green-400 font-semibold text-sm mb-2">Profile Forged</div>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
           <div><span class="text-gray-500">ID:</span> <span class="text-white font-mono" x-text="forgeResult?.profile_id"></span></div>
@@ -340,6 +397,39 @@
 
   <!-- DEVICE AGING -->
   <div x-show="genesisTab==='Device Aging'">
+    <!-- GAPPS BOOTSTRAP + MODEL STATUS -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div class="grp glow">
+        <h3 class="grp-title text-blue-400">Step 0: GApps Bootstrap</h3>
+        <p class="text-[11px] text-gray-500 mb-3">Install GMS, Play Store, Chrome, Google Pay on vanilla AOSP. Must run BEFORE aging. APKs in /opt/titan/data/gapps/</p>
+        <div class="space-y-3">
+          <div><label class="lbl">Target Device</label><select x-model="aging.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' [cuttlefish]'"></option></template></select></div>
+          <div class="grid grid-cols-5 gap-2 text-[10px]">
+            <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">GMS</div><div :class="gappsStatus?.gms_installed?'text-green-400':'text-red-400'" x-text="gappsStatus?.gms_installed?'OK':'Missing'"></div></div>
+            <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">Play Store</div><div :class="gappsStatus?.play_store_installed?'text-green-400':'text-red-400'" x-text="gappsStatus?.play_store_installed?'OK':'Missing'"></div></div>
+            <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">Chrome</div><div :class="gappsStatus?.chrome_installed?'text-green-400':'text-red-400'" x-text="gappsStatus?.chrome_installed?'OK':'Missing'"></div></div>
+            <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">GPay</div><div :class="gappsStatus?.wallet_installed?'text-green-400':'text-red-400'" x-text="gappsStatus?.wallet_installed?'OK':'Missing'"></div></div>
+            <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">APKs</div><div class="text-cyan-400" x-text="(gappsStatus?.apks_available||0)+' files'"></div></div>
+          </div>
+          <div class="flex gap-2">
+            <button @click="checkGapps()" :disabled="!aging.device_id" class="btn-secondary text-white px-4 py-2 rounded-lg text-xs flex-1 disabled:opacity-50">Check Status</button>
+            <button @click="runBootstrap()" :disabled="!aging.device_id||bootstrapRunning" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-xs font-bold flex-1 disabled:opacity-50"><span x-show="!bootstrapRunning">BOOTSTRAP GAPPS</span><span x-show="bootstrapRunning">Installing...</span></button>
+          </div>
+          <div class="log-area h-20 text-[10px]" x-text="bootstrapLog||'Check status or run bootstrap'"></div>
+        </div>
+      </div>
+      <div class="grp">
+        <h3 class="grp-title text-purple-400">AI Models (via Vast.ai GPU)</h3>
+        <p class="text-[11px] text-gray-500 mb-3">Trained LoRA models for device agent actions and screen understanding</p>
+        <div class="space-y-2">
+          <div class="flex items-center justify-between bg-[#1e293b] rounded-lg p-3"><div><div class="text-sm text-white">titan-agent:7b</div><div class="text-[10px] text-gray-500">Action planning (Qwen2.5-7B LoRA, Q4_K_M)</div></div><span class="text-[10px] px-2 py-0.5 rounded bg-green-900/50 text-green-400">Primary</span></div>
+          <div class="flex items-center justify-between bg-[#1e293b] rounded-lg p-3"><div><div class="text-sm text-white">titan-specialist:7b</div><div class="text-[10px] text-gray-500">Anomaly patching + wallet specialist</div></div><span class="text-[10px] px-2 py-0.5 rounded bg-cyan-900/50 text-cyan-400">Specialist</span></div>
+          <div class="flex items-center justify-between bg-[#1e293b] rounded-lg p-3"><div><div class="text-sm text-white">minicpm-v:8b</div><div class="text-[10px] text-gray-500">Screen understanding + vision</div></div><span class="text-[10px] px-2 py-0.5 rounded bg-purple-900/50 text-purple-400">Vision</span></div>
+          <div class="flex items-center justify-between bg-[#1e293b] rounded-lg p-3"><div><div class="text-sm text-white">hermes3:8b</div><div class="text-[10px] text-gray-500">General purpose fallback</div></div><span class="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-400">Fallback</span></div>
+        </div>
+      </div>
+    </div>
+    <!-- AGING PIPELINE -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div class="grp glow">
         <h3 class="grp-title text-yellow-400">Device Aging Pipeline (18 phases)</h3>
@@ -681,8 +771,10 @@ function titanConsole() {
     devices: [], presets: [], carriers: {}, locations: {}, profiles: [],
     creating: false, showScreen: false, screenDevice: null, screenWs: null,
     forging: false, forgeResult: null, forgeLog: '', osintLog: '', osintResult: null,
+    provisionJob: null, provisionResult: null, _provisionPollTimer: null,
     smartForgeLog: '', injecting: false, injectLog: '', trustScore: null,
     agingRunning: false, agingLog: '', historySubTab: 'Cookies',
+    gappsStatus: null, bootstrapRunning: false, bootstrapLog: '',
     kycWs: null,
 
     newDevice: { model: 'samsung_s25_ultra', country: 'US', carrier: 'tmobile_us', location: 'nyc' },
@@ -789,11 +881,73 @@ function titanConsole() {
       };
     },
 
+    // Genesis Forge — one-click full provision
+    async forgeAndProvision() {
+      this.forging=true; this.forgeResult=null; this.provisionJob=null; this.provisionResult=null;
+      this.forgeLog='[1/4] Forging profile...\n';
+      try {
+        const body = {
+          name:this.forge.name, email:this.forge.email, phone:this.forge.phone,
+          country:this.forge.country, archetype:this.forge.occupation||'professional',
+          age_days:this.forge.age_days||90, carrier:this.forge.carrier||'tmobile_us',
+          location:this.forge.location||'nyc', device_model:this.forge.device_model||'samsung_s25_ultra',
+          cc_number:this.forge.cc, cc_cardholder:this.forge.name,
+          cc_exp_month:parseInt((this.forge.cc_exp||'').split('/')[0])||0,
+          cc_exp_year:parseInt((this.forge.cc_exp||'').split('/')[1])||0,
+          cc_cvv:this.forge.cc_cvv
+        };
+        const r = await this.api('/genesis/create',{method:'POST',body:JSON.stringify(body)});
+        this.forgeResult = r;
+        this.forgeLog+='[2/4] Profile created: '+r.profile_id+'\n';
+        this.forgeLog+='  '+r.stats.contacts+' contacts / '+r.stats.call_logs+' calls / '+r.stats.sms+' SMS / '+r.stats.cookies+' cookies\n';
+        await this.loadProfiles();
+
+        this.forgeLog+='[3/4] Starting inject + patch pipeline...\n';
+        const pr = await this.api('/genesis/full-provision/'+this.forge.device_id,{method:'POST',body:JSON.stringify({
+          profile_id: r.profile_id,
+          cc_number: this.forge.cc,
+          cc_exp_month: parseInt((this.forge.cc_exp||'').split('/')[0])||0,
+          cc_exp_year: parseInt((this.forge.cc_exp||'').split('/')[1])||0,
+          cc_cvv: this.forge.cc_cvv,
+          cc_cardholder: this.forge.name,
+          lockdown: false,
+        })});
+        this.provisionJob = {status:'running', step:'inject', step_n:1};
+        this.forgeLog+='  Job: '+pr.job_id+' — polling...\n';
+
+        // Poll provision status
+        await new Promise((resolve) => {
+          const poll = async () => {
+            try {
+              const st = await this.api('/genesis/provision-status/'+pr.job_id);
+              this.provisionJob = st;
+              if(st.step==='patch') this.forgeLog = this.forgeLog.replace(/\[3\/4\].*/s,'[3/4] Full patch running ('+( st.phases_passed||'?')+'/'+( st.phases_total||'26')+' phases)...\n');
+              if(st.status==='completed') {
+                this.provisionResult = st;
+                this.forgeLog+='[4/4] Done! Stealth: '+st.patch_score+'% | Trust: '+st.trust_score+'/100 | GSM: '+(st.gsm?.ok?'OK ✓':'FAIL ✗')+' '+( st.gsm?.operator||'')+'\n';
+                resolve();
+              } else if(st.status==='failed') {
+                this.forgeLog+='ERROR: '+st.error+'\n';
+                resolve();
+              } else {
+                this._provisionPollTimer = setTimeout(poll, 2500);
+              }
+            } catch(e) {
+              this.forgeLog+='Poll error: '+e.message+'\n';
+              this._provisionPollTimer = setTimeout(poll, 3000);
+            }
+          };
+          poll();
+        });
+      } catch(e) { this.forgeLog+='ERROR: '+e.message+'\n'; }
+      this.forging=false;
+    },
+
     // Genesis Forge
     async forgeAndInject() { await this._runForge(true); },
     async forgeOnly() { await this._runForge(false); },
     async _runForge(inject) {
-      this.forging=true; this.forgeResult=null; this.forgeLog='Starting forge pipeline...\n';
+      this.forging=true; this.forgeResult=null; this.provisionJob=null; this.provisionResult=null; this.forgeLog='Starting forge pipeline...\n';
       try {
         const body = {
           name:this.forge.name, email:this.forge.email, phone:this.forge.phone,
@@ -870,6 +1024,24 @@ function titanConsole() {
     },
     async injectProfile(pid, did) { if(!did){alert('Select a device');return;} if(!confirm('Inject '+pid+' into '+did+'?'))return; try{await this.api('/genesis/inject/'+did,{method:'POST',body:JSON.stringify({profile_id:pid})}); alert('Injected!');} catch(e){alert(e.message);} },
     async deleteProfile(pid) { if(!confirm('Delete '+pid+'?'))return; await this.api('/genesis/profiles/'+pid,{method:'DELETE'}); await this.loadProfiles(); },
+
+    // GApps Bootstrap
+    async checkGapps() {
+      if(!this.aging.device_id) return;
+      try { this.gappsStatus = await this.api('/stealth/'+this.aging.device_id+'/gapps-status');
+        this.bootstrapLog='GMS='+this.gappsStatus.gms_installed+' PlayStore='+this.gappsStatus.play_store_installed+' Chrome='+this.gappsStatus.chrome_installed+' Wallet='+this.gappsStatus.wallet_installed+' ('+this.gappsStatus.total_google_packages+' Google pkgs, '+this.gappsStatus.apks_available+' APKs available)';
+      } catch(e) { this.bootstrapLog='Error: '+e.message; }
+    },
+    async runBootstrap() {
+      if(!this.aging.device_id) { alert('Select a device'); return; }
+      this.bootstrapRunning=true; this.bootstrapLog='Installing GApps on '+this.aging.device_id+'...\n';
+      try {
+        const r = await this.api('/stealth/'+this.aging.device_id+'/bootstrap-gapps',{method:'POST',body:JSON.stringify({skip_optional:false})});
+        this.bootstrapLog='Installed: '+r.installed.length+' | Skipped: '+r.already_installed.length+' | Failed: '+r.failed.length+' | Missing: '+r.missing_apks.length+'\nGMS='+r.gms_ready+' PlayStore='+r.play_store_ready+' Chrome='+r.chrome_ready+' Wallet='+r.wallet_ready;
+        await this.checkGapps();
+      } catch(e) { this.bootstrapLog='Error: '+e.message; }
+      this.bootstrapRunning=false;
+    },
 
     // Aging
     async runAging() {

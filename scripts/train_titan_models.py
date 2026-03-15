@@ -278,15 +278,16 @@ def train_action_model(data_dir: str, output_dir: str,
         save_strategy="epoch",
         eval_strategy="epoch" if val_ds else "no",
         fp16=True,
-        max_seq_length=max_seq_len,
+        max_length=max_seq_len,
         dataset_text_field="text",
         seed=42,
         report_to="none",
+        eos_token=tokenizer.eos_token,
     )
 
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         train_dataset=train_ds,
         eval_dataset=val_ds,
         args=training_args,
@@ -427,16 +428,17 @@ def train_vision_model(data_dir: str, output_dir: str,
         logging_steps=5,
         save_strategy="epoch",
         fp16=True,
-        max_seq_length=max_seq_len,
+        max_length=max_seq_len,
         seed=42,
         report_to="none",
         remove_unused_columns=False,
         dataset_kwargs={"skip_prepare_dataset": True},
+        eos_token=tokenizer.eos_token,
     )
 
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         train_dataset=train_ds,
         args=training_args,
         data_collator=None,  # unsloth handles this

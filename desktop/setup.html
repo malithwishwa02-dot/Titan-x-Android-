@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Titan Console — Setup</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#0a0e17; color:#e2e8f0; font-family:system-ui,-apple-system,sans-serif; height:100vh; display:flex; flex-direction:column; align-items:center; padding:40px 32px 24px; }
+    .logo { width:56px; height:56px; background:linear-gradient(135deg,#06b6d4,#3b82f6); border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:28px; font-weight:800; color:#fff; margin-bottom:16px; }
+    h1 { color:#00d4ff; font-size:20px; margin-bottom:4px; }
+    .subtitle { color:#64748b; font-size:13px; margin-bottom:28px; }
+
+    .checks { width:100%; max-width:440px; margin-bottom:24px; }
+    .check-row { display:flex; align-items:center; gap:10px; padding:10px 14px; background:#111827; border:1px solid #1e293b; border-radius:10px; margin-bottom:8px; }
+    .check-icon { width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; flex-shrink:0; }
+    .check-icon.ok { background:#065f46; color:#34d399; }
+    .check-icon.warn { background:#78350f; color:#fbbf24; }
+    .check-icon.fail { background:#7f1d1d; color:#f87171; }
+    .check-icon.pending { background:#1e293b; color:#64748b; }
+    .check-label { font-size:13px; color:#cbd5e1; flex:1; }
+    .check-detail { font-size:11px; color:#64748b; font-family:'Courier New',monospace; }
+
+    .log-area { width:100%; max-width:440px; background:#111827; border:1px solid #1e293b; border-radius:10px; padding:12px 14px; font-size:12px; font-family:'Courier New',monospace; color:#94a3b8; min-height:80px; max-height:120px; overflow-y:auto; margin-bottom:20px; white-space:pre-wrap; }
+
+    .actions { display:flex; gap:10px; }
+    button { padding:10px 28px; border-radius:10px; border:none; font-size:13px; font-weight:600; cursor:pointer; transition:all 0.15s; }
+    button:disabled { opacity:0.4; cursor:not-allowed; }
+    .btn-primary { background:linear-gradient(135deg,#06b6d4,#3b82f6); color:#fff; }
+    .btn-primary:hover:not(:disabled) { filter:brightness(1.15); }
+    .btn-secondary { background:#1e293b; color:#94a3b8; }
+    .btn-secondary:hover:not(:disabled) { background:#334155; color:#e2e8f0; }
+
+    .spinner-sm { display:inline-block; width:14px; height:14px; border:2px solid #1e293b; border-top-color:#00d4ff; border-radius:50%; animation:spin 0.7s linear infinite; margin-right:6px; vertical-align:middle; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="logo">T</div>
+  <h1>Titan Console Setup</h1>
+  <p class="subtitle">First-run environment configuration</p>
+
+  <div class="checks" id="checks">
+    <div class="check-row" id="chk-python">
+      <div class="check-icon pending" id="ico-python">?</div>
+      <span class="check-label">Python 3.10+</span>
+      <span class="check-detail" id="det-python">Checking...</span>
+    </div>
+    <div class="check-row" id="chk-adb">
+      <div class="check-icon pending" id="ico-adb">?</div>
+      <span class="check-label">ADB (Android Debug Bridge)</span>
+      <span class="check-detail" id="det-adb">Checking...</span>
+    </div>
+    <div class="check-row" id="chk-kvm">
+      <div class="check-icon pending" id="ico-kvm">?</div>
+      <span class="check-label">KVM Virtualization</span>
+      <span class="check-detail" id="det-kvm">Checking...</span>
+    </div>
+    <div class="check-row" id="chk-venv">
+      <div class="check-icon pending" id="ico-venv">?</div>
+      <span class="check-label">Python Virtual Environment</span>
+      <span class="check-detail" id="det-venv">Not created</span>
+    </div>
+    <div class="check-row" id="chk-deps">
+      <div class="check-icon pending" id="ico-deps">?</div>
+      <span class="check-label">Python Dependencies</span>
+      <span class="check-detail" id="det-deps">Not installed</span>
+    </div>
+  </div>
+
+  <div class="log-area" id="log">Initializing system checks...</div>
+
+  <div class="actions">
+    <button class="btn-primary" id="btn-setup" disabled>Install &amp; Configure</button>
+    <button class="btn-secondary" id="btn-launch" disabled>Launch Console</button>
+  </div>
+
+  <script>
+    const { titanDesktop } = window;
+
+    const log = document.getElementById('log');
+    const btnSetup = document.getElementById('btn-setup');
+    const btnLaunch = document.getElementById('btn-launch');
+
+    function setCheck(id, status, detail) {
+      const ico = document.getElementById('ico-' + id);
+      const det = document.getElementById('det-' + id);
+      ico.className = 'check-icon ' + status;
+      ico.textContent = status === 'ok' ? '✓' : status === 'warn' ? '!' : status === 'fail' ? '✗' : '?';
+      if (detail) det.textContent = detail;
+    }
+
+    function addLog(msg) {
+      log.textContent += '\n' + msg;
+      log.scrollTop = log.scrollHeight;
+    }
+
+    // Listen for progress messages from main process
+    titanDesktop.onSetupProgress((msg) => {
+      addLog(msg);
+      // Update check icons based on progress messages
+      if (msg.includes('Virtual environment ready')) setCheck('venv', 'ok', 'Created');
+      if (msg.includes('Dependencies installed')) setCheck('deps', 'ok', 'Installed');
+      if (msg.includes('Setup complete')) {
+        btnLaunch.disabled = false;
+        btnSetup.disabled = true;
+        btnSetup.textContent = 'Done ✓';
+      }
+      if (msg.startsWith('Error:')) {
+        btnSetup.disabled = false;
+        btnSetup.textContent = 'Retry Setup';
+      }
+    });
+
+    // Initial system checks
+    async function runChecks() {
+      const info = await titanDesktop.getSystemInfo();
+
+      // Python
+      if (info.python) {
+        setCheck('python', 'ok', info.python.version);
+        addLog('Found: ' + info.python.version);
+      } else {
+        setCheck('python', 'fail', 'Not found');
+        addLog('ERROR: Python 3.10+ not found. Install python3 first.');
+      }
+
+      // ADB
+      if (info.adb) {
+        setCheck('adb', 'ok', 'Found');
+        addLog('ADB: found on PATH');
+      } else {
+        setCheck('adb', 'warn', 'Not found');
+        addLog('WARNING: adb not found. Install with: apt install adb');
+      }
+
+      // KVM
+      if (info.kvm) {
+        setCheck('kvm', 'ok', '/dev/kvm');
+        addLog('KVM: available');
+      } else {
+        setCheck('kvm', 'warn', 'Not available');
+        addLog('WARNING: KVM not available. Cuttlefish VMs will not work on this machine.');
+      }
+
+      // Venv
+      if (info.venvExists) {
+        setCheck('venv', 'ok', info.venvDir);
+        addLog('Existing venv found at: ' + info.venvDir);
+      }
+
+      // Enable setup button if Python is available
+      if (info.python) {
+        btnSetup.disabled = false;
+      }
+
+      addLog('System checks complete. Click "Install & Configure" to continue.');
+    }
+
+    btnSetup.addEventListener('click', async () => {
+      btnSetup.disabled = true;
+      btnSetup.innerHTML = '<span class="spinner-sm"></span>Setting up...';
+      setCheck('venv', 'pending', 'Creating...');
+      setCheck('deps', 'pending', 'Installing...');
+      addLog('\n--- Starting setup ---');
+
+      const result = await titanDesktop.runSetup();
+      if (!result.ok) {
+        addLog('Setup failed: ' + result.error);
+        if (result.error && result.error.includes('timeout')) {
+          addLog('TIP: Pip install timed out. Check your internet connection and retry.');
+        }
+        setCheck('deps', 'fail', 'Failed');
+        btnSetup.disabled = false;
+        btnSetup.textContent = 'Retry Setup';
+      }
+    });
+
+    btnLaunch.addEventListener('click', async () => {
+      btnLaunch.disabled = true;
+      btnLaunch.textContent = 'Launching...';
+      await titanDesktop.launchConsole();
+    });
+
+    runChecks();
+  </script>
+</body>
+</html>

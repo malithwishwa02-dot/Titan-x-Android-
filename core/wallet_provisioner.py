@@ -272,6 +272,11 @@ class WalletProvisioner:
         if exp_year < 100:
             exp_year += 2000
 
+        # Guard: verify Google Pay is installed (prevents orphan data injection)
+        ok, gpay_check = _adb(self.target, 'shell "pm list packages com.google.android.apps.walletnfcrel 2>/dev/null"')
+        if "com.google.android.apps.walletnfcrel" not in gpay_check:
+            logger.warning("Google Pay not installed — wallet data may be orphaned. Run bootstrap-gapps first.")
+
         network_info = detect_network(clean_num)
         issuer = detect_issuer(clean_num)
         dpan = generate_dpan(clean_num)
@@ -943,6 +948,7 @@ class WalletProvisioner:
             phone = BANK_PHONES.get(issuer, "1-800-000-0000")
             sender = SENDER.get(issuer, "72000")
             num_sms = random.randint(3, 8)
+            sql_parts = []
 
             for i in range(num_sms):
                 age_days = random.randint(1, 28)
@@ -961,16 +967,16 @@ class WalletProvisioner:
                     amount=amount, merchant=merchant, phone=phone, bal=bal,
                 )
 
-                _adb_shell(self.target,
-                    f"content insert --uri content://sms "
-                    f"--bind address:s:{sender} "
-                    f"--bind body:s:'{body.replace(chr(39), '')}' "
-                    f"--bind type:i:1 "
-                    f"--bind date:l:{sms_ts} "
-                    f"--bind read:i:1 "
-                    f"--bind seen:i:1"
+                sql_parts.append(
+                    f"INSERT INTO sms(address,body,type,date,read,seen) "
+                    f"VALUES('{sender}','{body.replace(chr(39), str())}',1,{sms_ts},1,1)"
                 )
 
+            # Batch insert via sqlite3 (content provider freezes on Cuttlefish)
+            if sql_parts:
+                DB = "/data/data/com.android.providers.telephony/databases/mmssms.db"
+                sql_batch = ";".join(sql_parts)
+                _adb_shell(self.target, f'sqlite3 {DB} "{sql_batch}"')
             logger.info(f"  Bank SMS: {num_sms} notifications from {issuer} ({sender})")
 
         except Exception as e:

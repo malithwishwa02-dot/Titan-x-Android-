@@ -296,7 +296,7 @@ async def genesis_trust_score(device_id: str):
     # 6d. Keybox loaded
     keybox_prop = dm_shell(t, "getprop persist.titan.keybox.loaded")
     has_keybox = keybox_prop.strip() == "1" if keybox_prop else False
-    checks["keybox"] = {"loaded": has_keybox, "weight": 0}
+    checks["keybox"] = {"present": has_keybox, "loaded": has_keybox, "weight": 0}
 
     # 7. Play Store library
     has_library = bool(dm_shell(t, "ls /data/data/com.android.vending/databases/library.db 2>/dev/null"))
@@ -308,16 +308,18 @@ async def genesis_trust_score(device_id: str):
     checks["wifi_networks"] = {"present": has_wifi, "weight": 4}
     if has_wifi: score += 4
 
-    # 9. SMS present
-    sms_count = dm_shell(t, "content query --uri content://sms --projection _id | wc -l")
-    try: sms_n = int(sms_count.strip()) if sms_count.strip().isdigit() else 0
+    # 9. SMS present (sqlite3 fallback — content provider can freeze on Cuttlefish)
+    sms_count = dm_shell(t, "sqlite3 /data/data/com.android.providers.telephony/databases/mmssms.db 'SELECT COUNT(*) FROM sms' 2>/dev/null")
+    try: sms_n = int(sms_count.strip()) if sms_count and sms_count.strip().isdigit() else 0
     except ValueError: sms_n = 0
     checks["sms"] = {"count": sms_n, "weight": 7}
     if sms_n >= 5: score += 7
 
-    # 10. Call logs present
-    calls_count = dm_shell(t, "content query --uri content://call_log/calls --projection _id | wc -l")
-    try: calls_n = int(calls_count.strip()) if calls_count.strip().isdigit() else 0
+    # 10. Call logs present (sqlite3 fallback)
+    calls_count = dm_shell(t, "sqlite3 /data/data/com.android.providers.contacts/databases/calllog.db 'SELECT COUNT(*) FROM calls' 2>/dev/null")
+    if not calls_count or not calls_count.strip().isdigit():
+        calls_count = dm_shell(t, "content query --uri content://call_log/calls --projection _id 2>/dev/null | wc -l")
+    try: calls_n = int(calls_count.strip()) if calls_count and calls_count.strip().isdigit() else 0
     except ValueError: calls_n = 0
     checks["call_logs"] = {"count": calls_n, "weight": 7}
     if calls_n >= 10: score += 7
@@ -337,9 +339,28 @@ async def genesis_trust_score(device_id: str):
     checks["autofill"] = {"present": has_autofill, "weight": 5}
     if has_autofill: score += 5
 
+    # 14. GSM / SIM alignment (set by AnomalyPatcher Phase 2)
+    gsm_state    = dm_shell(t, "getprop gsm.sim.state")
+    gsm_operator = dm_shell(t, "getprop gsm.sim.operator.alpha")
+    gsm_mcc_mnc  = dm_shell(t, "getprop gsm.sim.operator.numeric")
+    gsm_ok = (
+        (gsm_state or "").strip() == "READY" and
+        len((gsm_operator or "").strip()) > 0 and
+        len((gsm_mcc_mnc or "").strip()) >= 5
+    )
+    checks["gsm_sim"] = {
+        "state": (gsm_state or "").strip(),
+        "operator": (gsm_operator or "").strip(),
+        "mcc_mnc": (gsm_mcc_mnc or "").strip(),
+        "ok": gsm_ok, "weight": 8,
+    }
+    if gsm_ok: score += 8
+
+    max_score = 108  # 100 base + 8 GSM
+    normalized = min(100, round(score / max_score * 100))
     return {
-        "device_id": device_id, "trust_score": score, "max_score": 100,
-        "grade": "A+" if score >= 90 else "A" if score >= 80 else "B" if score >= 65 else "C" if score >= 50 else "D" if score >= 30 else "F",
+        "device_id": device_id, "trust_score": normalized, "raw_score": score, "max_score": max_score,
+        "grade": "A+" if normalized >= 90 else "A" if normalized >= 80 else "B" if normalized >= 65 else "C" if normalized >= 50 else "D" if normalized >= 30 else "F",
         "checks": checks,
     }
 
@@ -433,6 +454,190 @@ class AgeDeviceBody(BaseModel):
     location: str = "nyc"
     age_days: int = 90
     persona: str = ""
+
+
+# ── Full Provision: inject + full_patch in one atomic background job ─────────
+
+class FullProvisionBody(BaseModel):
+    profile_id: str
+    cc_number: str = ""
+    cc_exp_month: int = 0
+    cc_exp_year: int = 0
+    cc_cvv: str = ""
+    cc_cardholder: str = ""
+    preset: str = ""       # optional override; defaults to profile's device_model
+    lockdown: bool = False
+
+
+_provision_jobs: Dict[str, dict] = {}
+
+
+def _run_provision_job(job_id: str, adb_target: str, profile_data: dict,
+                       card_data: Optional[dict], preset: str, lockdown: bool):
+    """Background worker: inject profile → full_patch (26 phases) → GSM verify → trust score."""
+    import subprocess as _sp
+    job = _provision_jobs[job_id]
+
+    def _adb(cmd, timeout=15):
+        try:
+            r = _sp.run(["adb", "-s", adb_target, "shell", cmd],
+                        capture_output=True, text=True, timeout=timeout)
+            return r.stdout.strip()
+        except Exception:
+            return ""
+
+    try:
+        # ── Step 1: Profile injection ────────────────────────────────
+        job.update({"step": "inject", "step_n": 1})
+        injector = ProfileInjector(adb_target=adb_target)
+        inj_result = injector.inject_full_profile(profile_data, card_data=card_data)
+        job["inject_trust"] = inj_result.trust_score
+
+        # ── Step 2: Full patch (26 phases, 103+ vectors) ─────────────
+        job.update({"step": "patch", "step_n": 2})
+        from anomaly_patcher import AnomalyPatcher
+        carrier  = profile_data.get("carrier",      "tmobile_us")
+        location = profile_data.get("location",     "nyc")
+        model    = preset or profile_data.get("device_model", "samsung_s25_ultra")
+        patcher  = AnomalyPatcher(adb_target=adb_target)
+        report   = patcher.full_patch(model, carrier, location, lockdown=lockdown)
+        job["patch_score"]    = report.score
+        job["phases_passed"]  = report.passed
+        job["phases_total"]   = report.total
+        job["patch_results"]  = report.results[:40]  # first 40 for payload size
+
+        # ── Step 3: GSM verify ────────────────────────────────────────
+        job.update({"step": "gsm_verify", "step_n": 3})
+        gsm_state    = _adb("getprop gsm.sim.state")
+        gsm_operator = _adb("getprop gsm.sim.operator.alpha")
+        gsm_mcc_mnc  = _adb("getprop gsm.sim.operator.numeric")
+        gsm_ok = (
+            gsm_state.strip() == "READY" and
+            len(gsm_operator.strip()) > 0 and
+            len(gsm_mcc_mnc.strip()) >= 5
+        )
+        job["gsm"] = {
+            "ok": gsm_ok,
+            "state": gsm_state.strip(),
+            "operator": gsm_operator.strip(),
+            "mcc_mnc": gsm_mcc_mnc.strip(),
+            "expected_carrier": carrier,
+        }
+
+        # ── Step 4: Trust score ───────────────────────────────────────
+        job.update({"step": "trust_score", "step_n": 4})
+        trust_raw = 0
+        trust_checks: dict = {}
+        # contacts
+        c = _adb("content query --uri content://contacts/phones --projection _id | wc -l")
+        cn = int(c.strip()) if c.strip().isdigit() else 0
+        trust_checks["contacts"] = cn >= 5; trust_raw += 8 if cn >= 5 else 0
+        # chrome cookies
+        ok = bool(_adb("ls /data/data/com.android.chrome/app_chrome/Default/Cookies 2>/dev/null"))
+        trust_checks["chrome_cookies"] = ok; trust_raw += 8 if ok else 0
+        # chrome history
+        ok = bool(_adb("ls /data/data/com.android.chrome/app_chrome/Default/History 2>/dev/null"))
+        trust_checks["chrome_history"] = ok; trust_raw += 8 if ok else 0
+        # wallet
+        tw = _adb("sqlite3 /data/data/com.google.android.apps.walletnfcrel/databases/tapandpay.db 'SELECT COUNT(*) FROM tokens' 2>/dev/null")
+        wt = int(tw.strip()) if tw and tw.strip().isdigit() else 0
+        trust_checks["google_pay"] = wt > 0; trust_raw += 12 if wt > 0 else 0
+        # sms
+        s = _adb("sqlite3 /data/data/com.android.providers.telephony/databases/mmssms.db 'SELECT COUNT(*) FROM sms' 2>/dev/null")
+        sn = int(s.strip()) if s and s.strip().isdigit() else 0
+        trust_checks["sms"] = sn >= 5; trust_raw += 7 if sn >= 5 else 0
+        # call logs
+        cl = _adb("sqlite3 /data/data/com.android.providers.contacts/databases/calllog.db 'SELECT COUNT(*) FROM calls' 2>/dev/null")
+        cln = int(cl.strip()) if cl and cl.strip().isdigit() else 0
+        trust_checks["call_logs"] = cln >= 10; trust_raw += 7 if cln >= 10 else 0
+        # wifi
+        ok = bool(_adb("ls /data/misc/wifi/WifiConfigStore.xml 2>/dev/null"))
+        trust_checks["wifi"] = ok; trust_raw += 4 if ok else 0
+        # gsm
+        trust_checks["gsm_sim"] = gsm_ok; trust_raw += 8 if gsm_ok else 0
+        trust_score = min(100, round(trust_raw / 62 * 100))  # 62 = max from above checks
+
+        job.update({
+            "status": "completed",
+            "step": "done",
+            "step_n": 4,
+            "trust_score": trust_score,
+            "trust_checks": trust_checks,
+            "completed_at": _time_mod.time(),
+        })
+        logger.info(f"Provision job {job_id} done: patch={report.score} trust={trust_score} gsm={'OK' if gsm_ok else 'FAIL'}")
+
+    except Exception as e:
+        job.update({"status": "failed", "error": str(e), "completed_at": _time_mod.time()})
+        logger.exception(f"Provision job {job_id} failed")
+
+
+@router.post("/full-provision/{device_id}")
+async def genesis_full_provision(device_id: str, body: FullProvisionBody):
+    """One-shot endpoint: inject genesis profile + full_patch (26 phases) + GSM verify.
+    Returns a job_id; poll /provision-status/{job_id} for progress."""
+    dev = dm.get_device(device_id)
+    if not dev:
+        raise HTTPException(404, "Device not found")
+
+    pf = _profiles_dir() / f"{body.profile_id}.json"
+    if not pf.exists():
+        raise HTTPException(404, f"Profile not found: {body.profile_id}")
+
+    profile_data = json.loads(pf.read_text())
+
+    # Attach gallery stubs if available
+    gallery_dir = Path(os.environ.get("TITAN_DATA", "/opt/titan/data")) / "forge_gallery"
+    if gallery_dir.exists():
+        profile_data["gallery_paths"] = [str(p) for p in sorted(gallery_dir.glob("*.jpg"))[:25]]
+
+    card_data = None
+    if body.cc_number:
+        card_data = {
+            "number": body.cc_number,
+            "exp_month": body.cc_exp_month,
+            "exp_year": body.cc_exp_year,
+            "cvv": body.cc_cvv,
+            "cardholder": body.cc_cardholder or profile_data.get("persona_name", ""),
+        }
+
+    job_id = str(_uuid.uuid4())[:8]
+    _provision_jobs[job_id] = {
+        "status": "running",
+        "device_id": device_id,
+        "profile_id": body.profile_id,
+        "step": "inject",
+        "step_n": 1,
+        "started_at": _time_mod.time(),
+        "patch_score": None,
+        "trust_score": None,
+        "gsm": None,
+    }
+
+    t = threading.Thread(
+        target=_run_provision_job,
+        args=(job_id, dev.adb_target, profile_data, card_data,
+              body.preset, body.lockdown),
+        daemon=True,
+    )
+    t.start()
+
+    return {
+        "status": "started",
+        "job_id": job_id,
+        "device_id": device_id,
+        "profile_id": body.profile_id,
+        "poll_url": f"/api/genesis/provision-status/{job_id}",
+    }
+
+
+@router.get("/provision-status/{job_id}")
+async def genesis_provision_status(job_id: str):
+    """Poll full-provision job status."""
+    job = _provision_jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Provision job not found")
+    return job
 
 
 @router.post("/age-device/{device_id}")

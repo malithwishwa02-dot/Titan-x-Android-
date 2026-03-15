@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 # Add core to path — project core, /opt/titan/core, then any PYTHONPATH entries
@@ -92,6 +92,22 @@ async def console_mobile():
     if mobile.exists():
         return HTMLResponse(mobile.read_text())
     return HTMLResponse("<h1>Mobile view not found</h1>")
+
+@app.get("/favicon.ico")
+async def favicon():
+    # Inline 1x1 transparent ICO to suppress 404s
+    ico = CONSOLE_DIR / "favicon.ico"
+    if ico.exists():
+        return Response(content=ico.read_bytes(), media_type="image/x-icon")
+    # Minimal 16x16 ICO header (transparent)
+    import struct
+    bmp = b'\x28\x00\x00\x00\x10\x00\x00\x00\x20\x00\x00\x00\x01\x00\x20\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+    pixels = b'\x00\xd4\xff\xff' * 256  # 16x16 cyan pixels
+    mask = b'\x00' * 64
+    img_data = bmp + pixels + mask
+    header = struct.pack('<HHH', 0, 1, 1)
+    entry = struct.pack('<BBBBHHII', 16, 16, 0, 0, 1, 32, len(img_data), 22)
+    return Response(content=header + entry + img_data, media_type="image/x-icon")
 
 
 # ═══════════════════════════════════════════════════════════════════════
