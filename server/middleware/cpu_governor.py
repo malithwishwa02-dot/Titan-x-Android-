@@ -1,7 +1,7 @@
 """
 Titan V11.3 — CPU Governor
-Monitors CPU usage to prevent Hostinger's 180-min throttle policy.
-Hostinger triggers 25%/hr CPU reduction after sustained high usage.
+Monitors CPU usage to prevent provider throttle policies.
+Configurable via TITAN_HOST_PROVIDER env var (default: auto-detected).
 """
 
 import asyncio
@@ -15,6 +15,7 @@ logger = logging.getLogger("titan.cpu-governor")
 CPU_WARN_PERCENT = 75
 CPU_CRITICAL_PERCENT = 85
 CHECK_INTERVAL = 30  # seconds
+HOST_PROVIDER = os.environ.get("TITAN_HOST_PROVIDER", "VPS")
 
 
 class CPUGovernor:
@@ -48,7 +49,7 @@ class CPUGovernor:
                 # Check 15-min average
                 avg_15m = self._avg_last_n_minutes(15)
                 if avg_15m > CPU_CRITICAL_PERCENT:
-                    logger.warning(f"CPU CRITICAL: 15-min avg={avg_15m:.1f}% — risk of Hostinger throttle")
+                    logger.warning(f"CPU CRITICAL: 15-min avg={avg_15m:.1f}% — risk of {HOST_PROVIDER} throttle")
                     self.is_throttled = True
                 elif avg_15m > CPU_WARN_PERCENT:
                     logger.info(f"CPU WARNING: 15-min avg={avg_15m:.1f}%")

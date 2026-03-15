@@ -240,6 +240,16 @@ class WalletProvisioner:
 
     def __init__(self, adb_target: str = "127.0.0.1:5555"):
         self.target = adb_target
+        self._browser_pkg, self._browser_data_path = self._resolve_browser()
+        self.CHROME_DATA = f"/data/data/{self._browser_pkg}"
+
+    def _resolve_browser(self):
+        """Detect Chrome vs Kiwi Browser."""
+        for pkg in ["com.android.chrome", "com.kiwibrowser.browser"]:
+            ok, out = _adb(self.target, f"shell pm path {pkg} 2>/dev/null")
+            if ok and out.strip():
+                return pkg, f"/data/data/{pkg}/app_chrome/Default"
+        return "com.android.chrome", "/data/data/com.android.chrome/app_chrome/Default"
 
     def provision_card(self,
                        card_number: str,
@@ -637,7 +647,7 @@ class WalletProvisioner:
                                     result: WalletProvisionResult):
         """Write card into Chrome's Web Data autofill database."""
         try:
-            _adb_shell(self.target, "am force-stop com.android.chrome")
+            _adb_shell(self.target, f"am force-stop {self._browser_pkg}")
             time.sleep(1)
 
             with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -774,7 +784,7 @@ class WalletProvisioner:
 
             _adb_shell(self.target, f"mkdir -p {self.CHROME_DATA}/app_chrome/Default")
             if _adb_push(self.target, tmp_path, web_data_path):
-                self._fix_ownership(web_data_path, "com.android.chrome")
+                self._fix_ownership(web_data_path, self._browser_pkg)
                 # Backdate Chrome Web Data to look established
                 chrome_backdate = time.strftime("%Y%m%d%H%M.%S", time.gmtime(date_added))
                 _adb_shell(self.target, f"touch -t {chrome_backdate} {web_data_path} 2>/dev/null")

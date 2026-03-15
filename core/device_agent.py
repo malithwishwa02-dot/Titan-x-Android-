@@ -171,6 +171,7 @@ def _query_ollama(prompt: str, model: str = DEFAULT_MODEL,
         "model": model,
         "prompt": prompt,
         "stream": False,
+        "format": "json",
         "options": {
             "temperature": temperature,
             "num_predict": max_tokens,
@@ -198,7 +199,15 @@ def _query_ollama(prompt: str, model: str = DEFAULT_MODEL,
 
 def _parse_action_json(text: str) -> Optional[Dict]:
     """Extract JSON action from LLM response."""
-    # Try to find JSON block
+    # Try full response as JSON first (most common with format=json)
+    try:
+        parsed = json.loads(text.strip())
+        if isinstance(parsed, dict) and "action" in parsed:
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Try to find JSON block with "action" key
     json_match = re.search(r'\{[^{}]*"action"[^{}]*\}', text, re.DOTALL)
     if json_match:
         try:
@@ -206,11 +215,14 @@ def _parse_action_json(text: str) -> Optional[Dict]:
         except json.JSONDecodeError:
             pass
 
-    # Try full response as JSON
-    try:
-        return json.loads(text.strip())
-    except json.JSONDecodeError:
-        pass
+    # Try fixing unquoted keys: {action: "tap"} -> {"action": "tap"}
+    fixed = re.sub(r'([{,])\s*(\w+)\s*:', r'\1 "\2":', text)
+    fix_match = re.search(r'\{[^{}]*"action"[^{}]*\}', fixed, re.DOTALL)
+    if fix_match:
+        try:
+            return json.loads(fix_match.group())
+        except json.JSONDecodeError:
+            pass
 
     # Try to extract from markdown code block
     code_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
@@ -227,32 +239,39 @@ def _parse_action_json(text: str) -> Optional[Dict]:
 # ACTION PROMPT TEMPLATE
 # ═══════════════════════════════════════════════════════════════════════
 
-_AGENT_SYSTEM_PROMPT = """You are an AI agent controlling an Android phone. You can see the screen and must decide the next action to complete the user's task.
+_AGENT_SYSTEM_PROMPT = """You are an AI agent controlling an Android phone. You see the screen and decide the next action.
 
-AVAILABLE ACTIONS (respond with exactly ONE JSON object):
-- {"action": "tap", "x": 540, "y": 1200, "reason": "tap Sign In button"}
-- {"action": "type", "text": "hello@gmail.com", "reason": "enter email address"}
-- {"action": "swipe", "x1": 540, "y1": 1800, "x2": 540, "y2": 600, "reason": "scroll down"}
-- {"action": "scroll_down", "reason": "scroll to see more content"}
-- {"action": "scroll_up", "reason": "scroll back up"}
-- {"action": "back", "reason": "go back to previous screen"}
-- {"action": "home", "reason": "go to home screen"}
-- {"action": "enter", "reason": "press enter/submit"}
-- {"action": "open_app", "package": "com.android.chrome", "reason": "open Chrome"}
-- {"action": "open_url", "url": "https://amazon.com", "reason": "navigate to URL"}
-- {"action": "wait", "seconds": 3, "reason": "wait for page to load"}
-- {"action": "done", "reason": "task is complete"}
-- {"action": "error", "reason": "cannot proceed because..."}
+ACTIONS (respond with exactly ONE JSON object):
+{"action": "tap", "x": 540, "y": 1200, "reason": "tap Sign In button"}
+{"action": "type", "text": "hello@gmail.com", "reason": "enter email"}
+{"action": "swipe", "x1": 540, "y1": 1800, "x2": 540, "y2": 600, "reason": "scroll down"}
+{"action": "scroll_down", "reason": "scroll to see more content"}
+{"action": "scroll_up", "reason": "scroll back up"}
+{"action": "back", "reason": "go back"}
+{"action": "home", "reason": "go to home screen"}
+{"action": "enter", "reason": "press enter/submit"}
+{"action": "open_app", "package": "com.android.chrome", "reason": "open Chrome"}
+{"action": "open_url", "url": "https://amazon.com", "reason": "navigate to URL"}
+{"action": "wait", "seconds": 3, "reason": "wait for page to load"}
+{"action": "done", "reason": "task is complete"}
+{"action": "error", "reason": "cannot proceed because..."}
 
-RULES:
-1. Respond with ONLY a single JSON object. No explanation outside JSON.
-2. The "reason" field must explain WHY you chose this action.
-3. Use exact pixel coordinates from the element list when tapping.
-4. If a text field needs input, tap it first, then type in the next step.
-5. After typing, press enter or tap submit button.
-6. Wait after navigation for pages to load.
-7. Say "done" when the task is clearly completed.
-8. Say "error" if you're stuck or the task is impossible."""
+CRITICAL FORMAT RULES:
+- Output ONLY a JSON object. No text before or after. No markdown.
+- WRONG: "To open settings..." {"action": "tap"}
+- WRONG: Step 1: {"action": "tap"} Step 2: ...
+- CORRECT: {"action": "tap", "x": 360, "y": 880, "reason": "tap Display"}
+
+BEHAVIOR RULES:
+1. Look at CURRENT SCREEN elements — only tap elements that are VISIBLE in the list.
+2. If the app you need is already open (check App line), do NOT use open_app again.
+3. If a target element is NOT in the visible list, use scroll_down to find it.
+4. Use exact pixel coordinates from the element list when tapping.
+5. If a text field needs input, tap it first, then type in the next step.
+6. After typing, press enter or tap the submit button.
+7. Wait after navigation for pages to load.
+8. Say done when the task is clearly completed.
+9. Say error if you are stuck or the task is impossible."""
 
 _STEP_PROMPT = """TASK: {task}
 
@@ -375,12 +394,12 @@ TASK_TEMPLATES = {
     },
     # ── BROWSE ────────────────────────────────────────────────────────
     "browse_url": {
-        "prompt": "Open Chrome browser and navigate to {url}. Wait for the page to load completely.",
+        "prompt": "Open the web browser and navigate to {url}. Wait for the page to load completely.",
         "params": ["url"],
         "category": "browse",
     },
     "search_google": {
-        "prompt": "Open Chrome, go to google.com, and search for '{query}'. Click on the first organic result and scroll through the page.",
+        "prompt": "Open the web browser, go to google.com, and search for '{query}'. Click on the first organic result and scroll through the page.",
         "params": ["query"],
         "category": "browse",
     },
@@ -568,6 +587,10 @@ class DeviceAgent:
                     task.status = "failed"
                     task.error = action.reasoning
                     break
+
+                # Post-action delay for UI transitions to settle
+                import random as _rnd
+                time.sleep(_rnd.uniform(1.5, 2.5))
 
                 # Prevent infinite loops — if last 5 actions are identical, stop
                 if len(task.actions) >= 5:

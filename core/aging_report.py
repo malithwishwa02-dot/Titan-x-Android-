@@ -11,6 +11,7 @@ Usage:
     # Returns full JSON report with all checks
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -162,25 +163,29 @@ class AgingReporter:
 
     async def _get_trust_score(self, device_id: str) -> Dict:
         """Fetch trust score from API (internal call)."""
-        try:
+        def _fetch():
             import urllib.request
             api_port = os.environ.get("TITAN_API_PORT", "8080")
             url = f"http://127.0.0.1:{api_port}/api/genesis/trust-score/{device_id}"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 return json.loads(resp.read().decode())
+        try:
+            return await asyncio.to_thread(_fetch)
         except Exception:
             return {"score": 0, "grade": "N/A", "error": "Could not fetch trust score"}
 
     async def _get_patch_score(self, device_id: str) -> Dict:
-        """Fetch latest patch results."""
-        try:
+        """Fetch latest patch/audit results."""
+        def _fetch():
             import urllib.request
             api_port = os.environ.get("TITAN_API_PORT", "8080")
-            url = f"http://127.0.0.1:{api_port}/api/stealth/{device_id}/patch-status"
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            url = f"http://127.0.0.1:{api_port}/api/stealth/{device_id}/audit"
+            req = urllib.request.Request(url, method="POST")
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read().decode())
+        try:
+            return await asyncio.to_thread(_fetch)
         except Exception:
             return {"score": 0, "phases": "N/A"}
 
@@ -200,18 +205,29 @@ class AgingReporter:
             return []
 
     def _load_injection_results(self, device_id: str) -> Dict:
-        """Load injection results from stored job data."""
-        # Check for recent inject job results
+        """Load injection results from stored profile data."""
         results = {
-            "contacts": 0,
-            "sms": 0,
-            "call_logs": 0,
-            "chrome_history": False,
-            "chrome_cookies": False,
-            "gallery_photos": 0,
-            "wallet": False,
+            "contacts": 0, "sms": 0, "call_logs": 0,
+            "chrome_history": False, "chrome_cookies": False,
+            "gallery_photos": 0, "wallet": False,
         }
-        # Could be enhanced to read from stored inject job results
+        if not PROFILES_DIR.exists():
+            return results
+
+        for f in PROFILES_DIR.glob("*.json"):
+            try:
+                data = json.loads(f.read_text())
+                if data.get("device_id") == device_id or device_id in f.name:
+                    results["contacts"] = len(data.get("contacts", []))
+                    results["sms"] = len(data.get("sms", []))
+                    results["call_logs"] = len(data.get("call_logs", []))
+                    results["chrome_history"] = len(data.get("history", [])) > 0
+                    results["chrome_cookies"] = len(data.get("cookies", [])) > 0
+                    results["gallery_photos"] = len(data.get("gallery_paths", []))
+                    results["wallet"] = bool(data.get("wallet_provisioned"))
+                    break
+            except Exception:
+                continue
         return results
 
     def _load_agent_tasks(self, device_id: str) -> List[Dict]:

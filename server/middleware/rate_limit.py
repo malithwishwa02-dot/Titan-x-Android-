@@ -24,6 +24,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._requests = defaultdict(list)  # ip -> [timestamps]
         self._create_requests = defaultdict(list)
+        self._request_count = 0
+        self._cleanup_interval = 100  # purge stale IPs every N requests
 
     def _check_limit(self, store: dict, ip: str, max_req: int, window: int):
         now = time.time()
@@ -34,12 +36,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         store[ip].append(now)
         return True
 
+    def _cleanup_stale_ips(self):
+        """Remove IPs with no recent timestamps to prevent memory growth."""
+        now = time.time()
+        max_window = max(w for _, w in RATE_LIMITS.values())
+        for store in (self._requests, self._create_requests):
+            stale = [ip for ip, ts in store.items() if not ts or now - ts[-1] > max_window * 2]
+            for ip in stale:
+                del store[ip]
+
     async def dispatch(self, request: Request, call_next):
         # Skip rate limiting for non-API paths
         if not request.url.path.startswith("/api/"):
             return await call_next(request)
 
         ip = request.client.host if request.client else "unknown"
+
+        # Periodic cleanup of stale IP entries
+        self._request_count += 1
+        if self._request_count % self._cleanup_interval == 0:
+            self._cleanup_stale_ips()
 
         # Check creation-specific rate limit
         if request.method == "POST" and request.url.path in CREATE_PATHS:

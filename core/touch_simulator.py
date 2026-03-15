@@ -53,12 +53,28 @@ class TouchSimulator:
     """Human-like touch input for Android devices via ADB."""
 
     def __init__(self, adb_target: str = "127.0.0.1:5555",
-                 screen_width: int = 1080, screen_height: int = 2400):
+                 screen_width: int = 0, screen_height: int = 0):
         self.target = adb_target
-        self.sw = screen_width
-        self.sh = screen_height
+        if screen_width and screen_height:
+            self.sw = screen_width
+            self.sh = screen_height
+        else:
+            self.sw, self.sh = self._detect_screen_size()
         self._last_action_time = 0.0
         self._sensor_sim = None
+
+    def _detect_screen_size(self) -> tuple:
+        """Auto-detect screen resolution via wm size."""
+        try:
+            ok, out = _adb(self.target, "shell wm size")
+            if ok and "x" in out:
+                import re
+                m = re.search(r'(\d+)x(\d+)', out)
+                if m:
+                    return int(m.group(1)), int(m.group(2))
+        except Exception:
+            pass
+        return 1080, 2400  # fallback
 
     def _get_sensor_sim(self):
         """Lazy-init sensor simulator for gesture coupling."""

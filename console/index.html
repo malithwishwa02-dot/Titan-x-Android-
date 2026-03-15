@@ -75,17 +75,23 @@
     <div class="grp"><div class="text-xs text-gray-500 mb-1">Avg Stealth</div><div class="text-2xl font-bold text-yellow-400" x-text="avgScore+'%'"></div></div>
     <div class="grp"><div class="text-xs text-gray-500 mb-1">Profiles</div><div class="text-2xl font-bold text-purple-400" x-text="profiles.length"></div></div>
   </div>
+  <div class="grid grid-cols-3 gap-4 mb-6">
+    <div class="grp flex items-center gap-3"><span class="text-[10px] bg-cyan-600/80 text-cyan-100 px-2 py-1 rounded font-medium">CVD</span><div><div class="text-xs text-gray-500">Cuttlefish KVM</div><div class="text-lg font-bold text-cyan-400" x-text="cvdCount+' VM'+(cvdCount!==1?'s':'')"></div></div></div>
+    <div class="grp flex items-center gap-3"><span class="text-[10px] bg-purple-600/80 text-purple-100 px-2 py-1 rounded font-medium">RDR</span><div><div class="text-xs text-gray-500">Redroid</div><div class="text-lg font-bold text-purple-400" x-text="redroidCount+' container'+(redroidCount!==1?'s':'')"></div></div></div>
+    <div class="grp flex items-center gap-3"><span class="text-[10px] bg-green-600/80 text-green-100 px-2 py-1 rounded font-medium">ERR</span><div><div class="text-xs text-gray-500">Errors</div><div class="text-lg font-bold" :class="devices.filter(d=>d.state==='error').length?'text-red-400':'text-green-400'" x-text="devices.filter(d=>d.state==='error').length"></div></div></div>
+  </div>
   <h3 class="text-sm font-semibold text-gray-400 mb-3">DEVICE FLEET</h3>
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
     <template x-for="dev in devices" :key="dev.id">
       <div class="device-card grp" @click="section='devices'">
         <div class="flex items-center justify-between mb-3">
-          <div class="flex items-center gap-1.5"><span class="text-xs font-mono text-gray-500" x-text="dev.id"></span><span class="text-[10px] bg-cyan-600/80 text-cyan-100 px-1.5 py-0.5 rounded font-medium">Cuttlefish</span></div>
+          <div class="flex items-center gap-1.5"><span class="text-xs font-mono text-gray-500" x-text="dev.id"></span><span class="text-[10px] px-1.5 py-0.5 rounded font-medium" :class="dev.device_type==='cuttlefish'?'bg-cyan-600/80 text-cyan-100':dev.device_type==='redroid'?'bg-purple-600/80 text-purple-100':dev.device_type==='vmos_cloud'?'bg-orange-600/80 text-orange-100':'bg-gray-600/80 text-gray-100'" x-text="devTypeName(dev.device_type)"></span></div>
           <div class="score-ring" :class="dev.stealth_score>=90?'bg-green-900/50 text-green-400 border border-green-700':dev.stealth_score>=70?'bg-yellow-900/50 text-yellow-400 border border-yellow-700':'bg-red-900/50 text-red-400 border border-red-700'" x-text="dev.stealth_score+'%'"></div>
         </div>
         <div class="text-sm font-semibold text-white mb-1" x-text="presetName(dev.config?.model)"></div>
         <div class="text-xs text-gray-500" x-text="(dev.config?.carrier||'').replace('_',' ')+' &#183; '+(dev.config?.country||'')"></div>
-        <div class="mt-3 flex items-center gap-2"><span class="w-2 h-2 rounded-full" :class="dev.state==='patched'?'bg-green-500':dev.state==='ready'?'bg-cyan-500':'bg-yellow-500 pulse-dot'"></span><span class="text-[11px] text-gray-400" x-text="dev.state"></span></div>
+        <div class="text-[10px] text-gray-600 mt-1" x-text="'Android '+(dev.config?.android_version||'15')+' &#183; ADB '+(dev.adb_target||'')"></div>
+        <div class="mt-2 flex items-center gap-2"><span class="w-2 h-2 rounded-full" :class="dev.state==='patched'?'bg-green-500':dev.state==='ready'?'bg-cyan-500':dev.state==='booting'?'bg-blue-500 pulse-dot':dev.state==='error'?'bg-red-500':'bg-yellow-500 pulse-dot'"></span><span class="text-[11px] text-gray-400" x-text="dev.state"></span><span x-show="dev.device_type==='cuttlefish'&&dev.instance_num" class="text-[10px] text-gray-600" x-text="'CVD#'+dev.instance_num"></span></div>
       </div>
     </template>
     <div class="device-card grp border-dashed !border-gray-700 flex flex-col items-center justify-center min-h-[160px]" @click="section='devices'">
@@ -111,8 +117,9 @@
       <div class="grp flex items-center gap-4">
         <div class="score-ring flex-shrink-0" :class="dev.stealth_score>=90?'bg-green-900/50 text-green-400 border border-green-700':'bg-yellow-900/50 text-yellow-400 border border-yellow-700'" x-text="dev.stealth_score+'%'"></div>
         <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-2"><span class="text-sm font-semibold text-white" x-text="presetName(dev.config?.model)"></span><span class="text-xs font-mono text-gray-500" x-text="dev.id"></span><span class="text-[10px] bg-cyan-600/80 text-cyan-100 px-1.5 py-0.5 rounded font-medium">Cuttlefish</span></div>
-          <div class="text-xs text-gray-500 mt-0.5" x-text="(dev.config?.carrier||'').replace('_',' ')+' &#183; '+(dev.config?.country||'')+' &#183; ADB '+(dev.adb_target||'')"></div>
+          <div class="flex items-center gap-2"><span class="text-sm font-semibold text-white" x-text="presetName(dev.config?.model)"></span><span class="text-xs font-mono text-gray-500" x-text="dev.id"></span><span class="text-[10px] px-1.5 py-0.5 rounded font-medium" :class="dev.device_type==='cuttlefish'?'bg-cyan-600/80 text-cyan-100':dev.device_type==='redroid'?'bg-purple-600/80 text-purple-100':dev.device_type==='vmos_cloud'?'bg-orange-600/80 text-orange-100':'bg-gray-600/80 text-gray-100'" x-text="devTypeName(dev.device_type)"></span></div>
+          <div class="text-xs text-gray-500 mt-0.5" x-text="(dev.config?.carrier||'').replace('_',' ')+' &#183; '+(dev.config?.country||'')+' &#183; ADB '+(dev.adb_target||'')+' &#183; Android '+(dev.config?.android_version||'15')"></div>
+          <div x-show="dev.device_type==='cuttlefish'" class="text-[10px] text-gray-600 mt-0.5" x-text="'CVD#'+(dev.instance_num||1)+' &#183; VNC :'+(dev.vnc_port||6444)+' &#183; '+(dev.cvd_home||'')"></div>
         </div>
         <div class="flex gap-2">
           <button @click="viewDevice(dev)" class="px-3 py-1.5 bg-cyan-900/50 text-cyan-400 rounded-lg text-xs hover:bg-cyan-900">Screen</button>
@@ -370,7 +377,7 @@
       <div class="grp glow">
         <h3 class="grp-title text-purple-400">Inject Profile Into Device</h3>
         <div class="space-y-3">
-          <div><label class="lbl">Target Device</label><select x-model="inject.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' [cuttlefish] ('+presetName(d.config?.model)+') &#8212; '+d.state"></option></template></select></div>
+          <div><label class="lbl">Target Device</label><select x-model="inject.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ['+devTypeName(d.device_type)+'] ('+presetName(d.config?.model)+') &#8212; '+d.state"></option></template></select></div>
           <div><label class="lbl">Profile</label><select x-model="inject.profile_id" class="inp"><option value="">Select profile...</option><template x-for="p in profiles" :key="p.id"><option :value="p.id" x-text="(p.persona_name||p.id)+' ('+(p.country||'')+', '+(p.age_days||0)+'d)'"></option></template></select></div>
           <div class="grid grid-cols-3 gap-3"><div><label class="lbl">CC Number</label><input type="text" x-model="inject.cc" placeholder="Card number" class="inp"></div><div><label class="lbl">Expiry</label><input type="text" x-model="inject.cc_exp" placeholder="MM/YYYY" class="inp"></div><div><label class="lbl">CVV</label><input type="text" x-model="inject.cc_cvv" placeholder="CVV" class="inp"></div></div>
           <div><label class="lbl">Cardholder Name</label><input type="text" x-model="inject.cc_name" placeholder="Name on card" class="inp"></div>
@@ -401,13 +408,13 @@
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
       <div class="grp glow">
         <h3 class="grp-title text-blue-400">Step 0: GApps Bootstrap</h3>
-        <p class="text-[11px] text-gray-500 mb-3">Install GMS, Play Store, Chrome, Google Pay on vanilla AOSP. Must run BEFORE aging. APKs in /opt/titan/data/gapps/</p>
+        <p class="text-[11px] text-gray-500 mb-3">Install GMS, Play Store, Browser (Kiwi), Google Pay on vanilla AOSP/Cuttlefish. Must run BEFORE aging. APKs in /opt/titan/data/gapps/</p>
         <div class="space-y-3">
-          <div><label class="lbl">Target Device</label><select x-model="aging.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' [cuttlefish]'"></option></template></select></div>
+          <div><label class="lbl">Target Device</label><select x-model="aging.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ['+devTypeName(d.device_type)+']'"></option></template></select></div>
           <div class="grid grid-cols-5 gap-2 text-[10px]">
             <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">GMS</div><div :class="gappsStatus?.gms_installed?'text-green-400':'text-red-400'" x-text="gappsStatus?.gms_installed?'OK':'Missing'"></div></div>
             <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">Play Store</div><div :class="gappsStatus?.play_store_installed?'text-green-400':'text-red-400'" x-text="gappsStatus?.play_store_installed?'OK':'Missing'"></div></div>
-            <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">Chrome</div><div :class="gappsStatus?.chrome_installed?'text-green-400':'text-red-400'" x-text="gappsStatus?.chrome_installed?'OK':'Missing'"></div></div>
+            <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">Browser</div><div :class="gappsStatus?.chrome_installed?'text-green-400':'text-red-400'" x-text="gappsStatus?.chrome_installed?'OK (Kiwi)':'Missing'"></div></div>
             <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">GPay</div><div :class="gappsStatus?.wallet_installed?'text-green-400':'text-red-400'" x-text="gappsStatus?.wallet_installed?'OK':'Missing'"></div></div>
             <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500">APKs</div><div class="text-cyan-400" x-text="(gappsStatus?.apks_available||0)+' files'"></div></div>
           </div>
@@ -432,10 +439,10 @@
     <!-- AGING PIPELINE -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div class="grp glow">
-        <h3 class="grp-title text-yellow-400">Device Aging Pipeline (18 phases)</h3>
-        <p class="text-[11px] text-gray-500 mb-3">Invokes AnomalyPatcher: 65+ vectors — timestamps, WiFi, usage stats, BT, keyboard, downloads, caches, camera, telephony, identity, build, RASP, GPU, battery, location, media.</p>
+        <h3 class="grp-title text-yellow-400">Device Aging Pipeline (23 phases)</h3>
+        <p class="text-[11px] text-gray-500 mb-3">Invokes AnomalyPatcher: 103+ vectors — identity, telephony, anti-emulator, build, RASP, GPU, battery, location, media, network, GMS, keybox, GSF, sensors, BT, /proc, camera, NFC, WiFi, SELinux, encryption, process stealth, audio, input, kernel.</p>
         <div class="space-y-3">
-          <div><label class="lbl">Target Device</label><select x-model="aging.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' [cuttlefish] ('+presetName(d.config?.model)+')'"></option></template></select></div>
+          <div><label class="lbl">Target Device</label><select x-model="aging.device_id" class="inp"><option value="">Select device...</option><template x-for="d in devices" :key="d.id"><option :value="d.id" x-text="d.id+' ['+devTypeName(d.device_type)+'] ('+presetName(d.config?.model)+')'"></option></template></select></div>
           <div class="grid grid-cols-2 gap-3">
             <div><label class="lbl">Age (days)</label><input type="number" x-model.number="aging.age_days" min="7" max="900" class="inp"></div>
             <div><label class="lbl">Device Preset</label><select x-model="aging.preset" class="inp"><option value="pixel_9_pro">Pixel 9 Pro</option><option value="samsung_s25_ultra">Samsung S25 Ultra</option><option value="samsung_s24">Samsung S24</option><option value="pixel_8a">Pixel 8a</option><option value="oneplus_13">OnePlus 13</option></select></div>
@@ -685,7 +692,7 @@
 <!-- ADMIN -->
 <div x-show="section==='admin'" x-cloak>
   <div class="flex gap-1 border-b border-gray-800 mb-4">
-    <template x-for="tab in ['Services','Tools','System','Automation','Diagnostics','Dashboard']">
+    <template x-for="tab in ['Services','Cuttlefish','System','Kernel','Diagnostics','Dashboard']">
       <button class="tab-btn px-3 py-2 text-xs text-gray-400 hover:text-white" :class="adminTab===tab?'active':''" @click="adminTab=tab" x-text="tab"></button>
     </template>
   </div>
@@ -696,18 +703,72 @@
       <button @click="loadServices()" class="btn-primary text-white px-4 py-2 rounded-lg text-xs font-bold mt-3">REFRESH</button>
     </div>
   </div>
+  <div x-show="adminTab==='Cuttlefish'">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="grp glow">
+        <h3 class="grp-title text-cyan-400">Cuttlefish VM Management</h3>
+        <p class="text-[11px] text-gray-500 mb-3">Manage Cuttlefish KVM Android VMs. Each device is a full Android VM with ADB, VNC, and WebRTC access.</p>
+        <div class="space-y-2">
+          <template x-for="dev in devices.filter(d=>d.device_type==='cuttlefish')" :key="dev.id">
+            <div class="flex items-center justify-between bg-[#1e293b] rounded-lg p-3">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2"><span class="text-sm text-white font-semibold" x-text="dev.id"></span><span class="text-[10px] bg-cyan-600/80 text-cyan-100 px-1.5 py-0.5 rounded">CVD#<span x-text="dev.instance_num||1"></span></span><span class="w-2 h-2 rounded-full" :class="dev.state==='patched'||dev.state==='ready'?'bg-green-500':dev.state==='booting'?'bg-blue-500 pulse-dot':dev.state==='error'?'bg-red-500':'bg-yellow-500'"></span></div>
+                <div class="text-[10px] text-gray-500 mt-0.5" x-text="'ADB '+dev.adb_target+' | VNC :'+dev.vnc_port+' | '+presetName(dev.config?.model)"></div>
+              </div>
+              <div class="flex gap-1.5 flex-shrink-0">
+                <button @click="restartCvd(dev.id)" class="px-2 py-1 bg-yellow-900/50 text-yellow-400 rounded text-[10px] hover:bg-yellow-900">Restart</button>
+                <button @click="viewDevice(dev)" class="px-2 py-1 bg-cyan-900/50 text-cyan-400 rounded text-[10px] hover:bg-cyan-900">Screen</button>
+                <button @click="fetchDeviceInfo(dev.id)" class="px-2 py-1 bg-blue-900/50 text-blue-400 rounded text-[10px] hover:bg-blue-900">Info</button>
+              </div>
+            </div>
+          </template>
+          <div x-show="!devices.filter(d=>d.device_type==='cuttlefish').length" class="text-xs text-gray-500 py-3 text-center">No Cuttlefish VMs. Create a device to spawn a CVD instance.</div>
+        </div>
+      </div>
+      <div class="space-y-4">
+        <div class="grp">
+          <h3 class="grp-title text-green-400">CVD Environment</h3>
+          <div class="space-y-1 text-xs">
+            <div class="flex justify-between"><span class="text-gray-500">CVD Bin Dir</span><span class="text-white font-mono text-[10px]" x-text="admin.cvd?.bin_dir||'/opt/titan/cuttlefish/cf/bin'"></span></div>
+            <div class="flex justify-between"><span class="text-gray-500">CVD Home Base</span><span class="text-white font-mono text-[10px]" x-text="admin.cvd?.home_base||'/opt/titan/cuttlefish'"></span></div>
+            <div class="flex justify-between"><span class="text-gray-500">Images Dir</span><span class="text-white font-mono text-[10px]" x-text="admin.cvd?.images_dir||'/opt/titan/cuttlefish/images'"></span></div>
+            <div class="flex justify-between"><span class="text-gray-500">Max Devices</span><span class="text-cyan-400" x-text="admin.cvd?.max_devices||8"></span></div>
+            <div class="flex justify-between"><span class="text-gray-500">Active CVDs</span><span class="text-green-400" x-text="devices.filter(d=>d.device_type==='cuttlefish').length"></span></div>
+          </div>
+          <button @click="loadCvdStatus()" class="btn-secondary text-white px-3 py-1.5 rounded-lg text-[10px] mt-3">REFRESH CVD STATUS</button>
+        </div>
+        <div class="grp">
+          <h3 class="grp-title text-purple-400">Device Info</h3>
+          <div class="log-area h-32 text-[10px]" x-text="admin.cvdInfoLog||'Click Info on a CVD device to see live ADB data'"></div>
+        </div>
+      </div>
+    </div>
+  </div>
   <div x-show="adminTab==='System'">
     <div class="grp glow">
       <h3 class="grp-title text-cyan-400">System Health</h3>
-      <div class="grid grid-cols-3 gap-4">
+      <div class="grid grid-cols-4 gap-4">
         <div class="grp"><div class="text-xs text-gray-500">CPU</div><div class="text-lg font-bold text-cyan-400" x-text="admin.health?.cpu||'\u2014'"></div></div>
         <div class="grp"><div class="text-xs text-gray-500">Memory</div><div class="text-lg font-bold text-yellow-400" x-text="admin.health?.memory||'\u2014'"></div></div>
         <div class="grp"><div class="text-xs text-gray-500">Disk</div><div class="text-lg font-bold text-green-400" x-text="admin.health?.disk||'\u2014'"></div></div>
+        <div class="grp"><div class="text-xs text-gray-500">CVD VMs</div><div class="text-lg font-bold text-purple-400" x-text="admin.health?.devices||0"></div></div>
       </div>
       <button @click="loadHealth()" class="btn-primary text-white px-4 py-2 rounded-lg text-xs font-bold mt-3">REFRESH</button>
     </div>
   </div>
-  <template x-for="tab in ['Tools','Automation','Diagnostics','Dashboard']"><div x-show="adminTab===tab"><div class="grp"><div class="grp-title text-cyan-400" x-text="tab"></div><div class="text-sm text-gray-500" x-text="'Admin \u2192 '+tab"></div></div></div></template>
+  <div x-show="adminTab==='Kernel'">
+    <div class="grp glow">
+      <h3 class="grp-title text-orange-400">Kernel Modules (Cuttlefish)</h3>
+      <p class="text-[11px] text-gray-500 mb-3">Required: kvm, vhost_vsock, vhost_net. Optional: binder_linux, ashmem_linux, v4l2loopback</p>
+      <div class="grid grid-cols-3 gap-2 text-[10px] mb-3">
+        <template x-for="mod in admin.kernelModules||[]" :key="mod.name">
+          <div class="bg-[#1e293b] rounded p-2 text-center"><div class="text-gray-500" x-text="mod.name"></div><div :class="mod.loaded?'text-green-400':'text-red-400'" x-text="mod.loaded?'Loaded':'Missing'"></div></div>
+        </template>
+      </div>
+      <button @click="loadKernelModules()" class="btn-secondary text-white px-3 py-1.5 rounded-lg text-xs">CHECK MODULES</button>
+    </div>
+  </div>
+  <template x-for="tab in ['Diagnostics','Dashboard']"><div x-show="adminTab===tab"><div class="grp"><div class="grp-title text-cyan-400" x-text="tab"></div><div class="text-sm text-gray-500" x-text="'Admin \u2192 '+tab"></div></div></div></template>
 </div>
 
 <!-- AI TASKS -->
@@ -749,17 +810,24 @@
 </main>
 
 <!-- DEVICE SCREEN MODAL -->
-<div x-show="showScreen" x-cloak class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center" @click.self="showScreen=false">
+<div x-show="showScreen" x-cloak class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center" @click.self="showScreen=false;if(_screenPollTimer)clearInterval(_screenPollTimer)">
   <div class="bg-[#111827] rounded-2xl border border-gray-700 overflow-hidden w-[420px]">
     <div class="flex items-center justify-between px-4 py-2 border-b border-gray-800">
-      <span class="text-sm text-cyan-400" x-text="screenDevice?.id||''"></span>
-      <div class="flex gap-2"><a :href="'/scrcpy/'" target="_blank" class="text-xs text-gray-400 hover:text-white px-2 py-1 bg-[#1e293b] rounded">HD Stream</a><button @click="showScreen=false" class="text-gray-400 hover:text-white text-lg">&times;</button></div>
+      <div class="flex items-center gap-2">
+        <span class="text-sm text-cyan-400" x-text="screenDevice?.id||''"></span>
+        <span class="text-[10px] px-1.5 py-0.5 rounded font-medium" :class="screenDevice?.device_type==='cuttlefish'?'bg-cyan-600/80 text-cyan-100':screenDevice?.device_type==='redroid'?'bg-purple-600/80 text-purple-100':'bg-gray-600/80 text-gray-100'" x-text="devTypeName(screenDevice?.device_type)"></span>
+      </div>
+      <div class="flex gap-2">
+        <a x-show="screenDevice?.device_type==='cuttlefish'" :href="'https://'+location.hostname+':8443'" target="_blank" class="text-xs text-gray-400 hover:text-white px-2 py-1 bg-[#1e293b] rounded">WebRTC</a>
+        <a x-show="screenDevice?.device_type!=='cuttlefish'" :href="'/scrcpy/'" target="_blank" class="text-xs text-gray-400 hover:text-white px-2 py-1 bg-[#1e293b] rounded">HD Stream</a>
+        <button @click="showScreen=false;if(_screenPollTimer)clearInterval(_screenPollTimer)" class="text-gray-400 hover:text-white text-lg">&times;</button>
+      </div>
     </div>
     <div class="bg-black flex items-center justify-center" style="height:600px"><canvas id="screenCanvas" width="540" height="600" class="max-w-full max-h-full"></canvas></div>
     <div class="flex justify-center gap-4 py-2 border-t border-gray-800">
-      <button class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25C0 Back</button>
-      <button class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25CF Home</button>
-      <button class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25B6 Recents</button>
+      <button @click="screenInput('back')" class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25C0 Back</button>
+      <button @click="screenInput('home')" class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25CF Home</button>
+      <button @click="screenInput('recents')" class="text-xs text-gray-400 hover:text-white px-3 py-1">\u25B6 Recents</button>
     </div>
   </div>
 </div>
@@ -792,16 +860,22 @@ function titanConsole() {
     intel: { copilot_query:'',copilot_log:'',recon_domain:'',recon_type:'full',recon_log:'' },
     network: { vpn_connected:false,vpn_server:'',vpn_ip:'' },
     targets: { url:'',depth:'basic',log:'' },
-    admin: { services:[],health:{} },
+    admin: { services:[],health:{},cvd:{},cvdInfoLog:'',kernelModules:[] },
     aiTasks: { device_id:'',template:'',prompt:'',templates:[],log:'' },
 
     agingPhases: [
-      {name:'System Settings',done:false,running:false},{name:'Filesystem Timestamps',done:false,running:false},
-      {name:'WiFi History',done:false,running:false},{name:'Usage Stats',done:false,running:false},
-      {name:'Package Manager',done:false,running:false},{name:'Bluetooth Pairs',done:false,running:false},
-      {name:'Keyboard Dictionary',done:false,running:false},{name:'Notification Policy',done:false,running:false},
-      {name:'Downloads Folder',done:false,running:false},{name:'App Caches',done:false,running:false},
-      {name:'Camera DCIM',done:false,running:false}
+      {name:'Device Identity',done:false,running:false},{name:'IMEI / SIM / Telephony',done:false,running:false},
+      {name:'Anti-Emulator',done:false,running:false},{name:'Build & Boot Verification',done:false,running:false},
+      {name:'Root & RASP Evasion',done:false,running:false},{name:'GPU / OpenGL',done:false,running:false},
+      {name:'Battery',done:false,running:false},{name:'GPS / Timezone / Locale',done:false,running:false},
+      {name:'Media & Social History',done:false,running:false},{name:'Network Identity',done:false,running:false},
+      {name:'GMS / Play Integrity',done:false,running:false},{name:'Keybox + Attestation',done:false,running:false},
+      {name:'GSF Fingerprint Alignment',done:false,running:false},{name:'Sensor Data',done:false,running:false},
+      {name:'Bluetooth Paired Devices',done:false,running:false},{name:'/proc Spoofing',done:false,running:false},
+      {name:'Camera Hardware',done:false,running:false},{name:'NFC & Storage',done:false,running:false},
+      {name:'WiFi Scan + Config',done:false,running:false},{name:'SELinux & Accessibility',done:false,running:false},
+      {name:'Storage Encryption',done:false,running:false},{name:'Deep Process Stealth',done:false,running:false},
+      {name:'Audio / Input / Kernel',done:false,running:false}
     ],
 
     hardeningLayers: [
@@ -833,6 +907,10 @@ function titanConsole() {
 
     get currentNav() { return this.navItems.find(n => n.key === this.section); },
     get avgScore() { if(!this.devices.length)return 0; return Math.round(this.devices.reduce((s,d)=>s+(d.stealth_score||0),0)/this.devices.length); },
+    get cvdCount() { return this.devices.filter(d=>d.device_type==='cuttlefish').length; },
+    get redroidCount() { return this.devices.filter(d=>d.device_type==='redroid').length; },
+
+    devTypeName(t) { return t==='cuttlefish'?'Cuttlefish':t==='redroid'?'Redroid':t==='vmos_cloud'?'VMOS Cloud':t||'Unknown'; },
 
     async init() {
       await this.loadPresets();
@@ -850,9 +928,29 @@ function titanConsole() {
     async loadDevices() { try { const d=await this.api('/devices'); this.devices=d.devices||[]; } catch(e) { console.error(e); } },
     async loadPresets() { try { const[p,c,l]=await Promise.all([this.api('/stealth/presets'),this.api('/stealth/carriers'),this.api('/stealth/locations')]); this.presets=p.presets||[]; this.carriers=c.carriers||{}; this.locations=l.locations||{}; } catch(e) { console.error(e); } },
     async loadProfiles() { try { const d=await this.api('/genesis/profiles'); this.profiles=(d.profiles||[]).map(p=>({...p,_injectDev:''})); } catch(e) { console.error(e); } },
-    async loadServices() { try { const d=await this.api('/admin/services'); this.admin.services=d.services||[]; } catch(e) {} },
+    async loadServices() {
+      try {
+        const d=await this.api('/admin/services');
+        const svcData = d.services||{};
+        if(Array.isArray(svcData)) { this.admin.services=svcData; }
+        else { this.admin.services=Object.entries(svcData).map(([name,status])=>({name,active:status==='active'})); }
+      } catch(e) {}
+    },
     async loadHealth() { try { const d=await this.api('/admin/health'); this.admin.health=d||{}; } catch(e) {} },
     async loadAiTemplates() { try { const d=await this.api('/agent/templates'); this.aiTasks.templates=d.templates||[]; } catch(e) {} },
+    async loadCvdStatus() { try { const d=await this.api('/admin/cvd-status'); this.admin.cvd=d||{}; } catch(e) { this.admin.cvd={}; } },
+    async loadKernelModules() {
+      try { const d=await this.api('/admin/kernel-modules'); this.admin.kernelModules=d.modules||[]; }
+      catch(e) { this.admin.kernelModules=['kvm','vhost_vsock','vhost_net','binder_linux','ashmem_linux','v4l2loopback'].map(n=>({name:n,loaded:false})); }
+    },
+    async restartCvd(deviceId) {
+      if(!confirm('Restart Cuttlefish VM '+deviceId+'?')) return;
+      try { await this.api('/devices/'+deviceId+'/restart',{method:'POST',body:'{}'}); alert('CVD restarting...'); await this.loadDevices(); } catch(e) { alert('Restart failed: '+e.message); }
+    },
+    async fetchDeviceInfo(deviceId) {
+      this.admin.cvdInfoLog='Loading device info for '+deviceId+'...\n';
+      try { const d=await this.api('/devices/'+deviceId+'/info'); this.admin.cvdInfoLog=JSON.stringify(d,null,2); } catch(e) { this.admin.cvdInfoLog='Error: '+e.message; }
+    },
 
     presetName(key) { const p=this.presets.find(p=>p.key===key); return p?p.name:key||'Unknown'; },
 
@@ -862,7 +960,24 @@ function titanConsole() {
     async patchDevice(id) { try { const r=await this.api('/stealth/'+id+'/patch',{method:'POST',body:'{}'}); alert('Patched: score='+r.score+'%'); await this.loadDevices(); } catch(e) { alert(e.message); } },
     async auditDevice(id) { try { const r=await this.api('/stealth/'+id+'/audit'); alert('Audit: '+r.passed+'/'+r.total+' ('+r.score+'%)'); } catch(e) { alert(e.message); } },
 
-    viewDevice(dev) { this.screenDevice=dev; this.showScreen=true; this.startScreenStream(dev.id); },
+    viewDevice(dev) { this.screenDevice=dev; this.showScreen=true; if(dev.device_type==='cuttlefish'){this.startScreenPolling(dev.id);}else{this.startScreenStream(dev.id);} },
+    async screenInput(key) {
+      if(!this.screenDevice) return;
+      const keyMap={back:'4',home:'3',recents:'187'};
+      try { await this.api('/devices/'+this.screenDevice.id+'/input',{method:'POST',body:JSON.stringify({type:'key',keycode:keyMap[key]||key})}); } catch(e) {}
+    },
+    startScreenPolling(deviceId) {
+      if(this._screenPollTimer) clearInterval(this._screenPollTimer);
+      const canvas=document.getElementById('screenCanvas');
+      const ctx=canvas?.getContext('2d');
+      const poll=()=>{
+        const img=new Image();
+        img.onload=()=>{ if(ctx){canvas.width=img.width;canvas.height=img.height;ctx.drawImage(img,0,0);} };
+        img.src='/api/devices/'+deviceId+'/screenshot?t='+Date.now();
+      };
+      poll();
+      this._screenPollTimer=setInterval(poll,1000);
+    },
     selectDevice(dev) { this.section='devices'; },
 
     startScreenStream(deviceId) {

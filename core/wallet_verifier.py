@@ -109,6 +109,16 @@ class WalletVerifier:
 
     def __init__(self, adb_target: str = "127.0.0.1:6520"):
         self.target = adb_target
+        self._browser_pkg = self._resolve_browser_pkg()
+        self.CHROME_DATA = f"/data/data/{self._browser_pkg}"
+
+    def _resolve_browser_pkg(self) -> str:
+        """Detect Chrome vs Kiwi Browser on device."""
+        for pkg in ["com.android.chrome", "com.kiwibrowser.browser"]:
+            out = self._sh(f"pm path {pkg} 2>/dev/null")
+            if out.strip():
+                return pkg
+        return "com.android.chrome"
 
     def _sh(self, cmd: str, timeout: int = 15) -> str:
         return _adb_shell(self.target, cmd, timeout)
@@ -152,10 +162,35 @@ class WalletVerifier:
             remediation="" if exists else "Run wallet provisioning: WalletProvisioner.provision_card()",
         )
 
+    def _query_db(self, remote_db: str, sql: str) -> str:
+        """Query a remote SQLite DB. Try device sqlite3 first, fall back to local."""
+        raw = self._sh(f"sqlite3 {remote_db} '{sql}' 2>/dev/null")
+        if raw and raw.strip():
+            return raw.strip()
+        # Fallback: pull DB locally and query with Python sqlite3
+        try:
+            import tempfile, subprocess, sqlite3
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+                tmp_path = tmp.name
+            r = subprocess.run(
+                ["adb", "-s", self.target, "pull", remote_db, tmp_path],
+                capture_output=True, timeout=15)
+            if r.returncode != 0:
+                return ""
+            conn = sqlite3.connect(tmp_path)
+            try:
+                row = conn.execute(sql).fetchone()
+                return str(row[0]) if row else ""
+            finally:
+                conn.close()
+                import os; os.unlink(tmp_path)
+        except Exception:
+            return ""
+
     def _check_tapandpay_tokens(self) -> WalletCheck:
         db_path = f"{self.WALLET_DATA}/databases/tapandpay.db"
-        raw = self._sh(f"sqlite3 {db_path} 'SELECT COUNT(*) FROM tokens' 2>/dev/null")
-        count = int(raw.strip()) if raw and raw.strip().isdigit() else 0
+        raw = self._query_db(db_path, "SELECT COUNT(*) FROM tokens")
+        count = int(raw) if raw and raw.isdigit() else 0
         return WalletCheck(
             name="tapandpay_token_count",
             passed=count > 0,
@@ -165,11 +200,7 @@ class WalletVerifier:
 
     def _check_token_metadata(self) -> WalletCheck:
         db_path = f"{self.WALLET_DATA}/databases/tapandpay.db"
-        raw = self._sh(
-            f"sqlite3 {db_path} "
-            "\"SELECT provisioning_status FROM token_metadata LIMIT 1\" 2>/dev/null"
-        )
-        status = raw.strip() if raw else ""
+        status = self._query_db(db_path, "SELECT provisioning_status FROM token_metadata LIMIT 1")
         ok = status == "PROVISIONED"
         return WalletCheck(
             name="token_provisioning_status",

@@ -169,64 +169,89 @@ class WorkflowEngine:
         logger.info(f"Workflow {job_id} started: {len(job.stages)} stages for {device_id}")
         return job
 
+    def _check_adb_connectivity(self, job: WorkflowJob) -> bool:
+        """Verify ADB connection to device before starting stages."""
+        import subprocess
+        dev = self.dm.get_device(job.device_id) if self.dm else None
+        target = dev.adb_target if dev else "127.0.0.1:6520"
+        try:
+            r = subprocess.run(
+                ["adb", "-s", target, "shell", "echo", "ok"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0 and "ok" in r.stdout:
+                logger.info(f"ADB connectivity OK: {target}")
+                return True
+            # Try reconnecting once
+            subprocess.run(["adb", "connect", target],
+                           capture_output=True, timeout=10)
+            time.sleep(2)
+            r = subprocess.run(
+                ["adb", "-s", target, "shell", "echo", "ok"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return r.returncode == 0 and "ok" in r.stdout
+        except Exception as e:
+            logger.error(f"ADB connectivity check failed: {e}")
+            return False
+
     def _run_workflow(self, job_id: str, persona: Dict, bundles: List[str],
                       card_data: Dict, country: str, aging: Dict):
         """Execute workflow stages sequentially."""
         job = self._jobs[job_id]
-        loop = asyncio.new_event_loop()
 
         try:
-            for stage in job.stages:
-                stage.status = "running"
-                stage.started_at = time.time()
+            # Pre-flight: verify ADB connectivity
+            if not self._check_adb_connectivity(job):
+                job.status = "failed"
+                job.completed_at = time.time()
+                logger.error(f"Workflow {job_id} aborted: ADB unreachable")
+                return
 
-                try:
-                    if stage.name == "bootstrap_gapps":
-                        loop.run_until_complete(
-                            self._stage_bootstrap_gapps(job))
-                    elif stage.name == "forge_profile":
-                        loop.run_until_complete(
-                            self._stage_forge(job, persona, country, aging))
-                    elif stage.name == "inject_profile":
-                        loop.run_until_complete(
-                            self._stage_inject(job, persona, card_data))
-                    elif stage.name == "patch_device":
-                        loop.run_until_complete(self._stage_patch(job, country))
-                    elif stage.name == "install_apps":
-                        loop.run_until_complete(
-                            self._stage_install_apps(job, bundles))
-                    elif stage.name == "setup_wallet":
-                        loop.run_until_complete(
-                            self._stage_wallet(job, card_data))
-                    elif stage.name == "warmup_browse":
-                        loop.run_until_complete(
-                            self._stage_warmup(job, "browse", aging))
-                    elif stage.name == "warmup_youtube":
-                        loop.run_until_complete(
-                            self._stage_warmup(job, "youtube", aging))
-                    elif stage.name == "verify_report":
-                        loop.run_until_complete(self._stage_verify(job))
-
-                    stage.status = "completed"
-                except Exception as e:
-                    stage.status = "failed"
-                    stage.error = str(e)
-                    logger.warning(f"Stage {stage.name} failed: {e}")
-                    # Continue to next stage even on failure
-
-                stage.completed_at = time.time()
+            asyncio.run(self._run_stages(job, persona, bundles, card_data, country, aging))
 
             job.status = "completed"
         except Exception as e:
             job.status = "failed"
             logger.exception(f"Workflow {job_id} failed: {e}")
-        finally:
-            loop.close()
 
         job.completed_at = time.time()
         duration = job.completed_at - job.created_at
         logger.info(f"Workflow {job_id} finished: {job.status} "
                      f"({job.completed_stages}/{len(job.stages)} stages, {duration:.0f}s)")
+
+    async def _run_stages(self, job: 'WorkflowJob', persona: Dict,
+                          bundles: List[str], card_data: Dict,
+                          country: str, aging: Dict):
+        """Execute all workflow stages in order."""
+        stage_map = {
+            "bootstrap_gapps": lambda: self._stage_bootstrap_gapps(job),
+            "forge_profile": lambda: self._stage_forge(job, persona, country, aging),
+            "inject_profile": lambda: self._stage_inject(job, persona, card_data),
+            "patch_device": lambda: self._stage_patch(job, country),
+            "install_apps": lambda: self._stage_install_apps(job, bundles),
+            "setup_wallet": lambda: self._stage_wallet(job, card_data),
+            "warmup_browse": lambda: self._stage_warmup(job, "browse", aging),
+            "warmup_youtube": lambda: self._stage_warmup(job, "youtube", aging),
+            "verify_report": lambda: self._stage_verify(job),
+        }
+
+        for stage in job.stages:
+            stage.status = "running"
+            stage.started_at = time.time()
+
+            try:
+                handler = stage_map.get(stage.name)
+                if handler:
+                    await handler()
+                stage.status = "completed"
+            except Exception as e:
+                stage.status = "failed"
+                stage.error = str(e)
+                logger.warning(f"Stage {stage.name} failed: {e}")
+                # Continue to next stage even on failure
+
+            stage.completed_at = time.time()
 
     # ─── STAGE IMPLEMENTATIONS ───────────────────────────────────────
 
@@ -356,7 +381,7 @@ class WorkflowEngine:
         logger.info(f"Patch complete: score={report.score}")
 
     async def _stage_install_apps(self, job: WorkflowJob, bundles: List[str]):
-        """Stage: Install apps via AI agent."""
+        """Stage: Install apps via AI agent in batches of 3."""
         from app_bundles import APP_BUNDLES
         apps = []
         for bkey in bundles:
@@ -367,36 +392,49 @@ class WorkflowEngine:
         if not apps:
             return
 
-        app_list = ", ".join(apps[:10])  # Cap at 10 for single agent task
         import urllib.request
         api = f"http://127.0.0.1:{os.environ.get('TITAN_API_PORT', '8080')}"
-        body = json.dumps({
-            "prompt": f"Open Google Play Store and install these apps one by one: {app_list}. For each: search by name, tap Install, wait to complete, then search for the next. Skip any requiring payment.",
-            "max_steps": 80,
-        }).encode()
-        req = urllib.request.Request(
-            f"{api}/api/agent/task/{job.device_id}",
-            data=body, headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
-            task_id = data.get("task_id", "")
+        batch_size = 3
+        batches = [apps[i:i + batch_size] for i in range(0, min(len(apps), 12), batch_size)]
 
-        # Poll for completion (up to 30 min)
-        for _ in range(360):
-            await asyncio.sleep(5)
+        for batch_idx, batch in enumerate(batches):
+            app_list = ", ".join(batch)
+            steps_per_app = 25
+            body = json.dumps({
+                "prompt": (f"Open Google Play Store and install these apps one by one: "
+                           f"{app_list}. For each: search by name, tap Install, wait for "
+                           f"it to complete, then search for the next. Skip any requiring payment."),
+                "max_steps": steps_per_app * len(batch),
+            }).encode()
+            req = urllib.request.Request(
+                f"{api}/api/agent/task/{job.device_id}",
+                data=body, headers={"Content-Type": "application/json"},
+                method="POST",
+            )
             try:
-                req = urllib.request.Request(
-                    f"{api}/api/agent/task/{job.device_id}/{task_id}")
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    status = json.loads(resp.read().decode())
-                    if status.get("status") in ("completed", "failed", "stopped"):
-                        logger.info(f"App install task {task_id}: {status.get('status')} "
-                                     f"({status.get('steps_taken', 0)} steps)")
-                        return
-            except Exception:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode())
+                    task_id = data.get("task_id", "")
+            except Exception as e:
+                logger.warning(f"App install batch {batch_idx} failed to start: {e}")
                 continue
+
+            # Poll for completion (up to 10 min per batch)
+            for _ in range(120):
+                await asyncio.sleep(5)
+                try:
+                    req = urllib.request.Request(
+                        f"{api}/api/agent/task/{job.device_id}/{task_id}")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        status = json.loads(resp.read().decode())
+                        if status.get("status") in ("completed", "failed", "stopped"):
+                            logger.info(f"App install batch {batch_idx+1}/{len(batches)}: "
+                                         f"{status.get('status')} ({status.get('steps_taken', 0)} steps)")
+                            break
+                except Exception:
+                    continue
+
+            await asyncio.sleep(3)  # Brief pause between batches
 
     async def _stage_wallet(self, job: WorkflowJob, card_data: Dict):
         """Stage: Set up wallet via ADB data injection."""
@@ -429,7 +467,7 @@ class WorkflowEngine:
         api = f"http://127.0.0.1:{os.environ.get('TITAN_API_PORT', '8080')}"
 
         if warmup_type == "browse":
-            prompt = ("Open Chrome and browse naturally. Visit Google, search for "
+            prompt = ("Open the web browser and browse naturally. Visit Google, search for "
                       "'best restaurants near me', click a result, scroll through it. "
                       "Then search for 'weather forecast', view results. Visit 2 more "
                       "websites naturally.")

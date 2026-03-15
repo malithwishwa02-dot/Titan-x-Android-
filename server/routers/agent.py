@@ -40,7 +40,7 @@ class AgentTaskBody(BaseModel):
     prompt: str = ""
     template: str = ""
     template_params: Dict[str, str] = {}
-    model: str = "hermes3:8b"
+    model: str = ""
     max_steps: int = 30
     persona: Dict[str, str] = {}
 

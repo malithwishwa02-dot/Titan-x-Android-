@@ -177,7 +177,8 @@ class GAppsBootstrap:
             "total_google_packages": sum(1 for p in pkgs if "google" in p or p == "com.android.vending"),
             "needs_bootstrap": not (gms and ps and ch and wl),
             "apk_dir": str(self.gapps_dir),
-            "apks_available": len(list(self.gapps_dir.glob("*.apk"))) if self.gapps_dir.exists() else 0,
+            "apks_available": (len(list(self.gapps_dir.glob("*.apk"))) +
+                              len(list(self.gapps_dir.glob("*.xapk")))) if self.gapps_dir.exists() else 0,
         }
 
     def run(self, skip_optional: bool = False) -> BootstrapResult:
@@ -253,7 +254,8 @@ class GAppsBootstrap:
         result.total_packages_after = len(self._get_installed_packages())
         result.gms_ready = self._is_installed("com.google.android.gms")
         result.play_store_ready = self._is_installed("com.android.vending")
-        result.chrome_ready = self._is_installed("com.android.chrome")
+        result.chrome_ready = (self._is_installed("com.android.chrome")
+                               or self._is_installed("com.kiwibrowser.browser"))
         result.wallet_ready = self._is_installed("com.google.android.apps.walletnfcrel")
         result.success = result.gms_ready and result.play_store_ready and not result.missing_apks
 
