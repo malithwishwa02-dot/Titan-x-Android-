@@ -100,7 +100,7 @@ CVD_HOME_BASE=/opt/titan/cuttlefish \
 CVD_IMAGES_DIR=/opt/titan/cuttlefish/images \
 PYTHONPATH="$TITAN_DIR/server:$TITAN_DIR/core" \
 nohup python3 -m uvicorn server.titan_api:app \
-    --host 0.0.0.0 --port 8080 --workers 1 \
+    --host 0.0.0.0 --port 8080 --workers 2 --loop uvloop --http httptools \
     > /tmp/titan_api.log 2>&1 &
 
 sleep 3

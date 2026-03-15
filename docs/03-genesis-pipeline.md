@@ -41,8 +41,10 @@ The Genesis Pipeline is the complete behavioral identity synthesis system. It fo
 │  ├── Google account (accounts_ce.db + Chrome prefs)              │
 │  ├── Chrome: cookies, history, autofill                          │
 │  ├── Contacts + Call logs + SMS                                  │
-│  ├── Gallery (EXIF-dated JPEGs)                                  │
+│  ├── Gallery (EXIF-tagged JPEGs: GPS, camera model, timestamps) │
 │  ├── App install dates (backdated)                               │
+│  ├── WiFi saved networks (WifiConfigStore.xml)                   │
+│  ├── App usage stats (cmd usagestats, 14 days)                   │
 │  ├── WalletProvisioner (4 targets)                               │
 │  └── AppDataForger (30+ app SharedPrefs + DBs)                   │
 └──────────────────────────────┬──────────────────────────────────┘
@@ -50,7 +52,8 @@ The Genesis Pipeline is the complete behavioral identity synthesis system. It fo
 ┌──────────────────────────────▼──────────────────────────────────┐
 │  STAGE 3: VERIFY                                                 │
 │  GET /api/genesis/trust-score/{device_id}                        │
-│  13-point scoring system    0-100                                │
+│  13-point trust scoring    0-100                                 │
+│  + WalletVerifier.verify()  13-check deep wallet verification    │
 │  → Grade: A+ (≥90) / A (≥80) / B (≥65) / C (≥50) / F           │
 └──────────────────────────────┬──────────────────────────────────┘
                                │

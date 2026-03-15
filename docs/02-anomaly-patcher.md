@@ -1,6 +1,6 @@
 # 02 — Anomaly Patcher
 
-The `AnomalyPatcher` class (`core/anomaly_patcher.py`) is the stealth core of Titan V11.3. It executes a 21-phase pipeline covering 70+ detection vectors to make a Cuttlefish Android VM indistinguishable from a real physical device — defeating emulator checks, RASP systems, Play Integrity attestation, and behavioral analytics engines.
+The `AnomalyPatcher` class (`core/anomaly_patcher.py`) is the stealth core of Titan V11.3. It executes a **26-phase pipeline covering 103+ detection vectors** to make a Cuttlefish Android VM indistinguishable from a real physical device — defeating emulator checks, RASP systems, Play Integrity attestation, and behavioral analytics engines.
 
 ---
 
@@ -8,7 +8,7 @@ The `AnomalyPatcher` class (`core/anomaly_patcher.py`) is the stealth core of Ti
 
 1. [Overview](#1-overview)
 2. [How Detection Works (Adversary Model)](#2-how-detection-works-adversary-model)
-3. [All 21 Phases — Complete Reference](#3-all-21-phases--complete-reference)
+3. [All 26 Phases — Complete Reference](#3-all-26-phases--complete-reference)
 4. [Sterile /proc Technique](#4-sterile-proc-technique)
 5. [Reboot Persistence](#5-reboot-persistence)
 6. [Audit Function](#6-audit-function)
@@ -81,7 +81,7 @@ Play Integrity API requests a cryptographic attestation from the TrustZone TEE. 
 
 ---
 
-## 3. All 21 Phases — Complete Reference
+## 3. All 26 Phases — Complete Reference
 
 ### Phase 1 — Device Identity (`_patch_device_identity`)
 
@@ -104,8 +104,8 @@ All `ro.*` properties are baked into Cuttlefish via `extra_bootconfig_args` at l
 | `ro.build.type` | `user` | Baked at boot |
 | `ro.build.tags` | `release-keys` | Baked at boot |
 | `ro.hardware` | `qcom` | Baked at boot |
-| `ro.serialno` | `R5CR12B4KTR` | `setprop` (random per run) |
-| `ro.boot.serialno` | `R5CR12B4KTR` | `setprop` (same as above) |
+| `ro.serialno` | `R5CR12B4KTR` | `resetprop` (random per run) |
+| `ro.boot.serialno` | `R5CR12B4KTR` | `resetprop` (same as above) |
 
 **Why boot-baking:** Apps using `SystemProperties.get()` via reflection will see baked props. Apps using `Build.*` Java API also read these from init. Runtime `setprop` alone is insufficient for all vectors.
 
@@ -154,12 +154,15 @@ Stock Cuttlefish `/proc/cmdline` contains:
 androidboot.hardware=cutf_cvm androidboot.slot_suffix=_a ... cuttlefish ...
 ```
 
-**The technique:** Read the file, strip all tokens containing `cuttlefish`, `vsoc`, `virtio`, `cutf_cvm`, `goldfish`. Write the clean version to `/data/titan/proc_cmdline_clean`. Bind-mount the clean file over `/proc/cmdline`:
+**The technique:** Read the file, strip all tokens containing `cuttlefish`, `vsoc`, `virtio`, `cutf_cvm`, `goldfish`. Write the clean version to an anonymous **tmpfs** at `/dev/.sc/cmdline`. Bind-mount the clean file over `/proc/cmdline`:
 ```bash
-mount -o bind /data/titan/proc_cmdline_clean /proc/cmdline
+mkdir -p /dev/.sc
+mount -t tmpfs -o size=1M,mode=700 tmpfs /dev/.sc
+cat /proc/cmdline | sed 's/cuttlefish//g; s/vsoc//g; ...' > /dev/.sc/cmdline
+mount -o bind /dev/.sc/cmdline /proc/cmdline
 ```
 
-This is **not** using `/dev/null` (detectable via `/proc/mounts`) but a real file with legitimate-looking contents.
+This is **not** using `/dev/null` (detectable via `/proc/mounts`) and avoids `/data/titan/` paths that could be fingerprinted. The tmpfs mount source appears as `tmpfs` in mountinfo — indistinguishable from system tmpfs.
 
 #### C. Sterile /proc/1/cgroup
 
@@ -167,12 +170,17 @@ Same technique for `/proc/1/cgroup` — strips Cuttlefish/vsoc/system.slice refe
 
 #### D. /proc/mounts Scrubbing
 
-After bind-mounting, `/proc/mounts` and `/proc/self/mountinfo` would show the bind-mounts. The patcher also masks these:
+After bind-mounting, `/proc/mounts` and `/proc/self/mountinfo` would show the bind-mounts. The patcher uses a **two-pass scrub** to eliminate all evidence:
 ```bash
-cat /proc/mounts | grep -v '/proc/cmdline' | grep -v '/proc/1/cgroup' \
-  > /data/titan/mounts_clean
-mount -o bind /data/titan/mounts_clean /proc/mounts
+FP='\.sc|titan_stl|titan|proc_cmdline|cgroup_clean|mounts_clean|mountinfo_clean'
+# Pass 1: scrub both mount tables
+cat /proc/mounts | grep -vE "$FP" > /dev/.sc/mounts_clean
+mount -o bind /dev/.sc/mounts_clean /proc/mounts
+cat /proc/self/mountinfo | grep -vE "$FP" > /dev/.sc/mountinfo_clean
+mount -o bind /dev/.sc/mountinfo_clean /proc/self/mountinfo
+# Pass 2: re-scrub to remove pass-1 bind-mount entries themselves
 ```
+Pass 2 catches the kernel-added entries from the pass-1 bind-mounts.
 
 #### E. Virtio PCI Vendor ID Masking
 
@@ -464,7 +472,7 @@ Props:
 ```bash
 setprop persist.titan.soc.name  "Qualcomm Technologies, Inc SM8650"
 setprop persist.titan.soc.cores "8"
-setprop ro.board.platform       "qcom"
+resetprop ro.board.platform     "qcom"   # ro.* requires resetprop
 setprop persist.titan.ram_gb    "12"   # 12GB for Ultra/Pro, 8GB for others
 ```
 
@@ -515,6 +523,8 @@ Locale-aware SSID pools — ISP-specific router names by region:
 
 The patcher writes a fake `WifiConfigStore.xml` with 5–10 area SSIDs and their signal strengths, consistent with the device's location profile.
 
+**Skip-if-injected (GAP-P4):** If `ProfileInjector` has already written `WifiConfigStore.xml` during profile injection, the patcher skips this phase to avoid overwriting persona-specific WiFi data.
+
 ---
 
 ### Phase 18 — SELinux & Accessibility (`_patch_selinux_accessibility`)
@@ -532,7 +542,90 @@ settings put secure enabled_accessibility_services ""
 
 ---
 
-### Phase 21 — Reboot Persistence (`_persist_patches`)
+### Phase 19 — Storage Encryption Masking (`_patch_storage_encryption`)
+
+**Vectors patched: 3**
+
+Real devices report encrypted storage. Cuttlefish may not set these props:
+
+```bash
+resetprop ro.crypto.state       "encrypted"
+resetprop ro.crypto.type        "file"
+resetprop ro.crypto.uses_fs_ioc_add_encryption_key "true"
+```
+
+All use `resetprop` since these are `ro.*` properties.
+
+---
+
+### Phase 20 — Deep Process Stealth (`_patch_deep_process_stealth`)
+
+**Vectors patched: ~8**
+
+Cuttlefish userspace processes (`cuttlefish_*`, `cvd_internal_*`, `vsoc_*`) are visible in `ps` output. The patcher:
+
+1. Renames `/proc/{pid}/comm` to `android.hardware.health@2.0` for all matching processes
+2. Bind-mounts empty cmdline over `/proc/{pid}/cmdline` (capped at 20 mounts to avoid mount-table explosion)
+3. Verifies no cuttlefish-named processes remain visible (kernel threads `[name]` are excluded)
+
+```bash
+# Cap at 20 PIDs to prevent mount-table explosion
+for pid in $(ps -eo pid,args | grep -iE 'cuttlefish|cvd_internal|vsoc' | head -20); do
+  echo -n 'android.hardware.health@2.0' > /proc/$pid/comm
+  mount -o bind /dev/.sc/empty_cmdline /proc/$pid/cmdline
+done
+```
+
+---
+
+### Phase 21 — Audio Subsystem (`_patch_audio_subsystem`)
+
+**Vectors patched: ~4**
+
+Cuttlefish uses `virtio_snd` which appears in `/proc/asound/cards`. The patcher bind-mounts a sterile file with brand-appropriate audio codec:
+
+| Brand | Card Line |
+|-------|-----------|
+| Samsung | `snd_soc_sm8650 - sm8650-audio` |
+| Google | `snd_soc_gs201 - Tensor-audio` |
+| Default | `snd_soc_msm - qualcomm-audio` |
+
+Also sets realistic media/voice volume baselines via `settings put system volume_*`.
+
+---
+
+### Phase 22 — Input Behavior (`_patch_input_behavior`)
+
+**Vectors patched: ~3**
+
+Sets realistic touch input parameters and screen timeout:
+
+```bash
+settings put system screen_off_timeout 60000      # 1 minute
+settings put system pointer_speed 0                # Default pointer speed
+settings put secure long_press_timeout 400         # Default long-press
+```
+
+---
+
+### Phase 23 — Kernel Hardening (`_patch_kernel_hardening`)
+
+**Vectors patched: ~6**
+
+Locks down kernel debug interfaces that reveal virtualization:
+
+```bash
+sysctl -w kernel.perf_event_paranoid=3    # Block perf access
+sysctl -w kernel.yama.ptrace_scope=3      # Block ptrace
+sysctl -w kernel.kptr_restrict=2          # Hide kernel pointers
+sysctl -w kernel.dmesg_restrict=1         # Restrict dmesg
+umount /sys/kernel/debug                  # Hide debugfs
+umount /sys/kernel/tracing                # Hide tracefs
+```
+
+---
+
+### Phase 24 — Reboot Persistence (`_persist_patches`)
 
 **Vectors patched: 2**
 
@@ -541,14 +634,34 @@ Cuttlefish VMs lose runtime `setprop` values on reboot. The patcher writes two p
 **`/system/etc/init.d/99-titan-patch.sh`** (requires remount-rw):
 ```bash
 #!/system/bin/sh
-# Titan V11.3 — Boot persistence patch (21 phases)
+# Titan V11.3 — Boot persistence patch (26 phases)
 setprop gsm.sim.state READY
 setprop gsm.network.type LTE
 # ... all runtime props
-mount -o bind /data/titan/proc_cmdline_clean /proc/cmdline
-mount -o bind /data/titan/cgroup_clean /proc/1/cgroup
+
+# Sterile /proc masking (tmpfs-backed, no /data/titan leaks)
+mkdir -p /dev/.sc
+mount -t tmpfs -o size=1M,mode=700 tmpfs /dev/.sc
+cat /proc/cmdline | sed '...' > /dev/.sc/cmdline
+mount -o bind /dev/.sc/cmdline /proc/cmdline
+echo '0::/' > /dev/.sc/cgroup
+mount -o bind /dev/.sc/cgroup /proc/1/cgroup
+
+# Resetprop auto-download (GAP-P3)
+RP=/data/local/tmp/magisk64
+if [ ! -x $RP ]; then
+  curl -sL https://github.com/.../Magisk-v28.1.apk -o /data/local/tmp/magisk.apk
+  unzip -jo /data/local/tmp/magisk.apk lib/arm64-v8a/libmagisk64.so -d /data/local/tmp/
+  mv /data/local/tmp/libmagisk64.so $RP && chmod 755 $RP
+fi
+
+# Boot count preservation (GAP-P6)
+BC=$(settings get global boot_count)
+[ -z "$BC" ] || [ "$BC" -lt 15 ] && \
+  settings put global boot_count $(( RANDOM % 40 + 20 ))
+
 ip link set eth0 down; ip link set eth0 name wlan0; ip link set wlan0 up
-# ... RASP, battery, etc.
+# ... RASP, battery, kernel hardening, deep process stealth, audio scrub, mountinfo scrub
 ```
 
 **`/data/adb/service.d/99-titan-patch.sh`** (Magisk-style, survives OTA):
@@ -558,7 +671,7 @@ Both scripts are `chmod 755`.
 
 ---
 
-### Optional — ADB Concealment (`_patch_adb_concealment`, lockdown=True)
+### Phase 25 — ADB Concealment (`_patch_adb_concealment`, lockdown=True)
 
 When `lockdown=True` is passed to `full_patch()`:
 
@@ -589,80 +702,119 @@ This is trivially detected by examining `/proc/self/mountinfo`:
 
 ```python
 def _create_sterile_proc_file(self, source, dest, strip_patterns, fallback):
-    # 1. Read actual /proc/cmdline from device
+    # 1. Setup anonymous tmpfs (once per session)
+    self._setup_tmpfs()  # mkdir /dev/.sc + mount tmpfs
+    
+    # 2. Read actual /proc/cmdline from device
     ok, content = self._sh(f"cat {source}")
     
-    # 2. Strip all tokens containing suspicious patterns
+    # 3. Strip all tokens containing suspicious patterns
     for pattern in strip_patterns:
         parts = [p for p in content.split() if pattern.lower() not in p.lower()]
         content = " ".join(parts)
     
-    # 3. Write clean version to /data/titan/
-    self._sh(f"echo '{content}' > {dest}")
+    # 4. Write clean version to tmpfs (NOT /data/titan/)
+    self._sh(f"echo '{content}' > {dest}")  # dest = /dev/.sc/cmdline
     
-    # 4. Bind-mount the clean REAL file (source is a legitimate path)
+    # 5. Bind-mount the clean file (source path is anonymous tmpfs)
     self._sh(f"mount -o bind {dest} {source}")
 ```
 
 `/proc/self/mountinfo` now shows:
 ```
-/data/titan/proc_cmdline_clean /proc/cmdline  ← legitimate-looking path
+tmpfs /dev/.sc tmpfs rw,size=1024k,mode=700 0 0
 ```
 
-This evades all known `/dev/null` bind-mount detectors.
+The mount source is `tmpfs` — indistinguishable from system tmpfs. No `/data/titan/` fingerprint leaks. This evades all known bind-mount and path-based detectors.
 
 ---
 
 ## 5. Reboot Persistence
 
-**Three-layer persistence:**
+**Four-layer persistence:**
 
 | Layer | Path | Mechanism |
 |-------|------|-----------|
 | Runtime props | `/data/local.prop` | Android reads at boot before init |
 | Init script | `/system/etc/init.d/99-titan-patch.sh` | Executed by Android init.d framework |
 | Magisk service | `/data/adb/service.d/99-titan-patch.sh` | Executed by Magisk's service.d runner |
+| Resetprop binary | `/data/local/tmp/magisk64` | Auto-downloaded from Magisk APK if missing |
 
-**local.prop** is written with all `persist.*` props that must survive reboot without root execution at boot time. Init.d and service.d handle dynamic operations (mount, ip, setprop) that require root execution.
+**local.prop** is written with all `persist.*` props that must survive reboot without root execution at boot time. Init.d and service.d handle dynamic operations (mount, ip, resetprop, tmpfs setup) that require root execution.
+
+**Resetprop auto-download (GAP-P3):** The persistence script checks if `magisk64` exists at `/data/local/tmp/magisk64`. If missing (e.g., cleaned up between reboots), it downloads `Magisk-v28.1.apk` from GitHub, extracts `libmagisk64.so`, and installs it as the resetprop binary. This ensures `ro.*` overrides survive even if the binary is removed.
+
+**Boot count preservation (GAP-P6):** On each boot, the script checks if `boot_count` is below 15 (indicating a fresh VM). If so, it sets a realistic value (20–60) to pass behavioral analysis.
 
 ---
 
 ## 6. Audit Function
 
-`patcher.audit()` performs a **non-destructive read-only check** of the current device state:
+`patcher.audit()` performs a **non-destructive read-only check** of the current device state across **44 vectors**:
 
 ```python
 checks = patcher.audit()
 # Returns:
 {
-    "passed": 18,
-    "total": 20,
-    "score": 90,
+    "passed": 40,
+    "total": 44,
+    "score": 91,
     "checks": {
+        # Core identity (6)
         "qemu_hidden":           True,
         "virtual_hidden":        True,
         "debuggable_off":        True,
         "secure_on":             True,
         "build_type_user":       True,
         "release_keys":          True,
+        # /proc stealth (4)
         "proc_cmdline_sterile":  True,
         "proc_cgroup_sterile":   True,
+        "mountinfo_clean":       True,   # No titan/pstl/sc leaks
+        "proc_mounts_clean":     True,
+        # Boot verification (3)
         "verified_boot_green":   True,
         "bootloader_locked":     True,
+        "selinux_enforcing":     True,
+        # Telephony (3)
         "sim_ready":             True,
         "carrier_set":           True,
         "network_lte":           True,
+        # Identity (3)
         "fingerprint_set":       True,
         "model_set":             True,
         "serial_set":            True,
-        "adb_disabled":          False,   # ADB still enabled
+        # Browser (1) — checks both Chrome and Kiwi paths
+        "chrome_cookies_exist":  True,
+        # GMS/Keybox (3)
         "keybox_loaded":         True,
         "gsf_aligned":           True,
+        "gms_version_set":       True,
+        # Hardware stealth (6)
+        "gpu_renderer_set":      True,
+        "battery_realistic":     True,
+        "wlan0_exists":          True,
+        "bluetooth_paired":      True,
+        "nfc_enabled":           True,
+        "camera_info_set":       True,
+        # Deep stealth (6)
+        "no_cuttlefish_procs":   True,
+        "audio_cards_clean":     True,
+        "kernel_hardened":       True,
+        "crypto_state_encrypted":True,
+        "boot_count_realistic":  True,
+        "wifi_scan_populated":   True,
+        # Operational (2)
+        "adb_disabled":          False,   # Expected unless lockdown=True
+        "persist_script_exists": True,
+        # ... additional checks
     }
 }
 ```
 
 **Note:** `adb_disabled=False` is expected unless `lockdown=True` was used — ADB must remain enabled for the platform to function.
+
+**Browser path (GAP-P2):** The `chrome_cookies_exist` check now looks at both `com.android.chrome` and `com.kiwibrowser.browser` paths, since Kiwi Browser is used as the Chrome replacement on vanilla AOSP (Chrome requires TrichromeLibrary).
 
 ---
 
@@ -735,7 +887,7 @@ class PatchReport:
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/stealth/{device_id}/patch` | Run full_patch (preset, carrier, location) |
-| `GET` | `/api/stealth/{device_id}/audit` | Non-destructive state audit (20 checks) |
+| `GET` | `/api/stealth/{device_id}/audit` | Non-destructive state audit (44 checks) |
 | `GET` | `/api/stealth/{device_id}/wallet-verify` | Deep wallet state verification (13 checks) |
 | `GET` | `/api/stealth/presets` | List all available device presets |
 | `GET` | `/api/stealth/carriers` | List all carrier profiles |

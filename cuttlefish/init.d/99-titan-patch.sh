@@ -55,7 +55,11 @@ log_i "Anti-emulator props set"
 
 # ─── Hide Cuttlefish / vsoc / Virtio artifacts ───────────────────────
 # Bind-mounting /dev/null is detectable via /proc/mounts — generate clean files
-mkdir -p /data/titan
+mkdir -p /data/titan 2>/dev/null
+
+# Sterile /proc masking (tmpfs-backed, no /data/titan leaks)
+mkdir -p /dev/.sc
+mount -t tmpfs -o size=1M,mode=700 tmpfs /dev/.sc 2>/dev/null
 
 # Sterile /proc/cmdline — strip cuttlefish, vsoc, virtio, cutf_cvm, goldfish
 if [ -f /proc/cmdline ]; then
@@ -63,21 +67,22 @@ if [ -f /proc/cmdline ]; then
         | sed 's/cuttlefish[^ ]*//g' | sed 's/vsoc[^ ]*//g' \
         | sed 's/virtio[^ ]*//g' | sed 's/cutf_cvm[^ ]*//g' \
         | sed 's/goldfish[^ ]*//g' | sed 's/  */ /g' \
-        > /data/titan/proc_cmdline_clean 2>/dev/null
-    # Ensure non-empty
-    [ -s /data/titan/proc_cmdline_clean ] || \
-        echo "androidboot.verifiedbootstate=green androidboot.slot_suffix=_a" > /data/titan/proc_cmdline_clean
-    mount -o bind /data/titan/proc_cmdline_clean /proc/cmdline 2>/dev/null
+        > /dev/.sc/cmdline 2>/dev/null
+    [ -s /dev/.sc/cmdline ] || \
+        echo "androidboot.verifiedbootstate=green androidboot.slot_suffix=_a" > /dev/.sc/cmdline
+    mount -o bind /dev/.sc/cmdline /proc/cmdline 2>/dev/null
 fi
 
 # Sterile /proc/1/cgroup
-echo "0::/" > /data/titan/cgroup_clean
-mount -o bind /data/titan/cgroup_clean /proc/1/cgroup 2>/dev/null
+echo "0::/" > /dev/.sc/cgroup
+mount -o bind /dev/.sc/cgroup /proc/1/cgroup 2>/dev/null
 
 # Scrub /proc/mounts to hide bind-mount evidence
-cat /proc/mounts | grep -v '/proc/cmdline' | grep -v '/proc/1/cgroup' \
-    > /data/titan/mounts_clean 2>/dev/null
-mount -o bind /data/titan/mounts_clean /proc/mounts 2>/dev/null
+FP='\.sc|titan_stl|titan|proc_cmdline|cgroup_clean|mounts_clean|mountinfo_clean'
+cat /proc/mounts | grep -vE "$FP" > /dev/.sc/mounts_clean 2>/dev/null
+mount -o bind /dev/.sc/mounts_clean /proc/mounts 2>/dev/null
+cat /proc/self/mountinfo | grep -vE "$FP" > /dev/.sc/mountinfo_clean 2>/dev/null
+mount -o bind /dev/.sc/mountinfo_clean /proc/self/mountinfo 2>/dev/null
 
 log_i "Cuttlefish/vsoc proc artifacts hidden (sterile files)"
 
@@ -158,6 +163,12 @@ if [ -f /data/titan/cpuinfo_spoof ]; then
     mount -o bind /data/titan/cpuinfo_spoof /proc/cpuinfo 2>/dev/null
     log_i "cpuinfo spoofed"
 fi
+
+# Boot count — preserve realistic value across reboots
+BC=$(settings get global boot_count 2>/dev/null)
+[ -z "$BC" ] || [ "$BC" = "null" ] || [ "$BC" -lt 15 ] 2>/dev/null && \
+    settings put global boot_count $(( $(od -An -N1 -tu1 /dev/urandom) % 40 + 20 )) 2>/dev/null
+log_i "Boot count preserved"
 
 # ─── SELinux & accessibility ──────────────────────────────────────
 setprop ro.boot.selinux enforcing

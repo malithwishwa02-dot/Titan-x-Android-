@@ -477,8 +477,38 @@ def generate_trajectory(template_name: str, template_def: dict, persona: dict,
         is_last = action.get("action") == "done"
         success = True if is_last else random.random() > 0.05
 
-        # Build synthetic screen context
-        screen_ctx = random.choice(SCREEN_CONTEXTS.get("home_screen"))
+        # Build synthetic screen context — vary per step (gap fix: context blindness)
+        action_type = action.get("action", "")
+        ctx_key = "home_screen"
+        if action_type == "open_app":
+            ctx_key = "home_screen"
+        elif "play" in prompt_text.lower() or "install" in prompt_text.lower():
+            if step_num <= 2:
+                ctx_key = "home_screen"
+            elif step_num <= 5:
+                ctx_key = "play_store_search"
+            else:
+                ctx_key = random.choice(["play_store_installing", "play_store_installed"])
+        elif "sign" in prompt_text.lower() or "login" in prompt_text.lower():
+            if step_num <= 2:
+                ctx_key = "settings_main"
+            else:
+                ctx_key = random.choice(["google_signin_form", "google_password_form", "instagram_login"])
+        elif "wallet" in prompt_text.lower() or "card" in prompt_text.lower():
+            ctx_key = "wallet_add_card" if step_num > 2 else "home_screen"
+        elif "youtube" in prompt_text.lower():
+            ctx_key = "youtube_home"
+        elif "browse" in prompt_text.lower() or "chrome" in prompt_text.lower():
+            ctx_key = "chrome_browser"
+        elif "permission" in prompt_text.lower():
+            ctx_key = random.choice(["permission_dialog", "notification_prompt"])
+        elif "gmail" in prompt_text.lower():
+            ctx_key = "gmail_compose" if step_num > 1 else "home_screen"
+        elif "maps" in prompt_text.lower():
+            ctx_key = "maps_main"
+        elif "settings" in prompt_text.lower():
+            ctx_key = "settings_main"
+        screen_ctx = random.choice(SCREEN_CONTEXTS.get(ctx_key, SCREEN_CONTEXTS["home_screen"]))
         try:
             screen_ctx = screen_ctx.format(**fmt_vars)
         except (KeyError, IndexError):
@@ -486,6 +516,9 @@ def generate_trajectory(template_name: str, template_def: dict, persona: dict,
 
         # Build LLM prompt
         llm_prompt = f"TASK: {prompt_text}\n\nSTEP {step_num}/{len(actions)}\n\nCURRENT SCREEN:\n{screen_ctx}\n\nWhat is the next action?"
+        # Gap fix: keep reason fields ≤50 chars to avoid token truncation
+        if "reason" in action and len(action["reason"]) > 50:
+            action["reason"] = action["reason"][:50]
         llm_response = json.dumps(action)
 
         step_record = {

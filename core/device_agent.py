@@ -162,7 +162,7 @@ class AgentTask:
 def _query_ollama(prompt: str, model: str = DEFAULT_MODEL,
                   ollama_url: str = GPU_OLLAMA_URL,
                   temperature: float = 0.3,
-                  max_tokens: int = 512) -> str:
+                  max_tokens: int = 256) -> str:
     """Query Ollama API and return raw text response."""
     import urllib.request
     import urllib.error
@@ -181,18 +181,23 @@ def _query_ollama(prompt: str, model: str = DEFAULT_MODEL,
     urls_to_try = [ollama_url, CPU_OLLAMA_URL] if ollama_url != CPU_OLLAMA_URL else [ollama_url]
 
     for url in urls_to_try:
-        try:
-            req = urllib.request.Request(
-                f"{url}/api/generate",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=STEP_TIMEOUT) as resp:
-                data = json.loads(resp.read().decode())
-                return data.get("response", "")
-        except Exception as e:
-            logger.warning(f"Ollama ({url}) failed: {e}")
-            continue
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    f"{url}/api/generate",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=STEP_TIMEOUT) as resp:
+                    data = json.loads(resp.read().decode())
+                    return data.get("response", "")
+            except Exception as e:
+                wait = 2 ** (attempt + 1)
+                logger.warning(f"Ollama ({url}) attempt {attempt+1}/3 failed: {e}, retry in {wait}s")
+                if attempt < 2:
+                    time.sleep(wait)
+                continue
+        logger.warning(f"Ollama ({url}) exhausted all retries, trying next endpoint")
 
     return ""
 
@@ -239,39 +244,35 @@ def _parse_action_json(text: str) -> Optional[Dict]:
 # ACTION PROMPT TEMPLATE
 # ═══════════════════════════════════════════════════════════════════════
 
-_AGENT_SYSTEM_PROMPT = """You are an AI agent controlling an Android phone. You see the screen and decide the next action.
+_AGENT_SYSTEM_PROMPT = """You are an AI agent controlling an Android phone. Output ONE JSON action per response.
 
-ACTIONS (respond with exactly ONE JSON object):
-{"action": "tap", "x": 540, "y": 1200, "reason": "tap Sign In button"}
-{"action": "type", "text": "hello@gmail.com", "reason": "enter email"}
-{"action": "swipe", "x1": 540, "y1": 1800, "x2": 540, "y2": 600, "reason": "scroll down"}
-{"action": "scroll_down", "reason": "scroll to see more content"}
-{"action": "scroll_up", "reason": "scroll back up"}
-{"action": "back", "reason": "go back"}
-{"action": "home", "reason": "go to home screen"}
-{"action": "enter", "reason": "press enter/submit"}
-{"action": "open_app", "package": "com.android.chrome", "reason": "open Chrome"}
-{"action": "open_url", "url": "https://amazon.com", "reason": "navigate to URL"}
-{"action": "wait", "seconds": 3, "reason": "wait for page to load"}
-{"action": "done", "reason": "task is complete"}
-{"action": "error", "reason": "cannot proceed because..."}
+FORMAT (pick ONE):
+{"action":"tap","x":540,"y":1200,"reason":"tap Sign In"}
+{"action":"type","text":"hello@gmail.com","reason":"enter email"}
+{"action":"scroll_down","reason":"scroll to find element"}
+{"action":"scroll_up","reason":"scroll back up"}
+{"action":"swipe","x1":540,"y1":1800,"x2":540,"y2":600,"reason":"swipe"}
+{"action":"back","reason":"go back"}
+{"action":"home","reason":"home screen"}
+{"action":"enter","reason":"submit"}
+{"action":"open_app","package":"com.android.settings","reason":"open Settings"}
+{"action":"open_url","url":"https://amazon.com","reason":"navigate"}
+{"action":"wait","seconds":3,"reason":"wait for load"}
+{"action":"done","reason":"task complete"}
+{"action":"error","reason":"cannot proceed"}
 
-CRITICAL FORMAT RULES:
-- Output ONLY a JSON object. No text before or after. No markdown.
-- WRONG: "To open settings..." {"action": "tap"}
-- WRONG: Step 1: {"action": "tap"} Step 2: ...
-- CORRECT: {"action": "tap", "x": 360, "y": 880, "reason": "tap Display"}
-
-BEHAVIOR RULES:
-1. Look at CURRENT SCREEN elements — only tap elements that are VISIBLE in the list.
-2. If the app you need is already open (check App line), do NOT use open_app again.
-3. If a target element is NOT in the visible list, use scroll_down to find it.
-4. Use exact pixel coordinates from the element list when tapping.
-5. If a text field needs input, tap it first, then type in the next step.
-6. After typing, press enter or tap the submit button.
-7. Wait after navigation for pages to load.
-8. Say done when the task is clearly completed.
-9. Say error if you are stuck or the task is impossible."""
+RULES (strictly follow):
+1. Output ONLY the JSON object — no text before or after, no markdown, no steps.
+2. WRONG: "Let me..." {"action":"tap"}  WRONG: Step 1: {...} Step 2: {...}
+3. CORRECT: {"action":"tap","x":360,"y":880,"reason":"tap Display"}
+4. Only tap elements VISIBLE in the CURRENT SCREEN list — use exact coordinates shown.
+5. If the needed app is NOT open yet: use open_app with its package name. If already open: do NOT use open_app.
+6. If a target element is NOT visible in the list: use scroll_down — do NOT tap off-screen coordinates.
+7. To enter text: FIRST tap the text field, THEN type in the next step. Never type without tapping first.
+8. After typing text, press enter or tap the submit/search button.
+9. Wait 2-3s after app launches or page navigations.
+10. Say done only when the task goal is clearly achieved.
+11. Say error only if truly stuck after multiple attempts."""
 
 _STEP_PROMPT = """TASK: {task}
 
@@ -633,6 +634,29 @@ class DeviceAgent:
             action.reasoning = f"Screen capture failed: {screen.error}"
             return action
 
+        # 1b. AUTO-DISMISS — handle crash/ANR dialogs before LLM query
+        _crash_patterns = ["isn't responding", "has stopped", "keeps stopping",
+                           "close app", "app isn't responding"]
+        if screen.all_text:
+            _lower_text = screen.all_text.lower()
+            for _pat in _crash_patterns:
+                if _pat in _lower_text:
+                    # Try to dismiss: tap "Close app" or "Wait" or "OK"
+                    for el in screen.elements:
+                        if el.text and el.text.lower() in ("close app", "close", "wait", "ok"):
+                            self.touch.tap(el.center[0], el.center[1])
+                            action.action_type = "dismiss_dialog"
+                            action.reasoning = f"Auto-dismissed crash dialog: '{_pat}' → tapped '{el.text}'"
+                            action.success = True
+                            logger.info(f"Step {step}: auto-dismissed crash/ANR dialog")
+                            return action
+                    # Fallback: press Back to dismiss
+                    self.touch.press_back()
+                    action.action_type = "dismiss_dialog"
+                    action.reasoning = f"Auto-dismissed crash dialog via BACK key: '{_pat}'"
+                    action.success = True
+                    return action
+
         # 2. THINK — ask LLM for next action
         screen_context = screen.to_llm_context()
 
@@ -648,9 +672,23 @@ class DeviceAgent:
                     f"{vision_desc_text}"
                 )
 
-        # Build action history (last 8 actions)
+        # Scroll heuristic: if last action was NOT scroll and task mentions a keyword
+        # not visible in current elements, append a hint to steer the model.
+        if not vision_used and screen.elements:
+            visible_texts = " ".join(e.text.lower() for e in screen.elements if e.text)
+            # Extract meaningful words from task prompt (>4 chars, not common verbs)
+            _skip = {"open", "find", "the", "and", "tap", "click", "into", "from",
+                     "with", "that", "this", "then", "after", "when", "your", "scroll"}
+            task_words = [w.lower().strip(".,") for w in task.prompt.split()
+                          if len(w) > 4 and w.lower().strip(".,") not in _skip]
+            last_action = task.actions[-1].action_type if task.actions else ""
+            if task_words and last_action not in ("scroll_down", "scroll_up"):
+                if not any(w in visible_texts for w in task_words[:6]):
+                    screen_context += "\n[HINT: Target element not visible in current view — consider scroll_down]"
+
+        # Build action history (last 12 actions)
         history_lines = []
-        for prev in task.actions[-8:]:
+        for prev in task.actions[-12:]:
             history_lines.append(
                 f"  Step {prev.step}: {prev.action_type}({json.dumps(prev.params)}) → {'OK' if prev.success else 'FAIL'} | {prev.reasoning[:60]}"
             )
@@ -690,7 +728,7 @@ class DeviceAgent:
             return action
 
         action.action_type = parsed.get("action", "error")
-        action.reasoning = parsed.get("reason", "")
+        action.reasoning = parsed.get("reason", "")[:60]
         action.params = {k: v for k, v in parsed.items() if k not in ("action", "reason")}
 
         # 4. ACT — execute the action

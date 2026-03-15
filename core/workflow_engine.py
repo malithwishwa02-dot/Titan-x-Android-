@@ -111,7 +111,8 @@ class WorkflowEngine:
                              aging_level: str = "medium",
                              skip_forge: bool = False,
                              skip_patch: bool = False,
-                             profile_id: str = "") -> WorkflowJob:
+                             profile_id: str = "",
+                             disable_adb: bool = False) -> WorkflowJob:
         """Start a complete device aging workflow."""
         job_id = f"wf-{uuid.uuid4().hex[:8]}"
         aging = AGING_LEVELS.get(aging_level, AGING_LEVELS["medium"])
@@ -152,8 +153,12 @@ class WorkflowEngine:
         job.stages.append(WorkflowStage(name="warmup_browse", method="agent"))
         job.stages.append(WorkflowStage(name="warmup_youtube", method="agent"))
         job.stages.append(WorkflowStage(name="verify_report", method="inject"))
+        if disable_adb:
+            job.stages.append(WorkflowStage(name="lockdown_device", method="inject"))
 
         self._jobs[job_id] = job
+
+        job.config["disable_adb"] = disable_adb
 
         # Run in background thread
         thread = threading.Thread(
@@ -234,6 +239,7 @@ class WorkflowEngine:
             "warmup_browse": lambda: self._stage_warmup(job, "browse", aging),
             "warmup_youtube": lambda: self._stage_warmup(job, "youtube", aging),
             "verify_report": lambda: self._stage_verify(job),
+            "lockdown_device": lambda: self._stage_lockdown(job),
         }
 
         for stage in job.stages:
@@ -502,12 +508,52 @@ class WorkflowEngine:
                 continue
 
     async def _stage_verify(self, job: WorkflowJob):
-        """Stage: Generate verification report."""
+        """Stage: Generate verification report + deep wallet verification."""
         from aging_report import AgingReporter
         reporter = AgingReporter(device_manager=self.dm)
         report = await reporter.generate(device_id=job.device_id)
         job.report = report.to_dict()
         logger.info(f"Verify report: {report.overall_grade} ({report.overall_score}/100)")
+
+        # Deep wallet verification (13-check)
+        try:
+            from wallet_verifier import WalletVerifier
+            dev = self.dm.get_device(job.device_id) if self.dm else None
+            target = dev.adb_target if dev else "127.0.0.1:6520"
+            wv = WalletVerifier(adb_target=target)
+            wallet_report = wv.verify()
+            job.report["wallet_verification"] = wallet_report.to_dict()
+            logger.info(f"Wallet verify: {wallet_report.passed}/{wallet_report.total} ({wallet_report.grade})")
+        except Exception as e:
+            logger.warning(f"Wallet verification failed: {e}")
+
+    async def _stage_lockdown(self, job: WorkflowJob):
+        """Stage: Production lockdown — disable ADB and developer options.
+
+        Only called when disable_adb=True was passed to start_workflow.
+        Disables ADB to remove the biggest forensic indicator that a device
+        is under automated control. Device becomes unmanageable via ADB
+        after this — only use in production deployments.
+        """
+        import subprocess
+        dev = self.dm.get_device(job.device_id) if self.dm else None
+        target = dev.adb_target if dev else "127.0.0.1:6520"
+        logger.info(f"Lockdown: disabling ADB on {target}")
+        try:
+            cmds = [
+                "settings put global adb_enabled 0",
+                "settings put global development_settings_enabled 0",
+                "settings put secure adb_notify 0",
+                "setprop service.adb.tcp.port -1",
+                "setprop persist.sys.usb.config mtp",
+            ]
+            subprocess.run(
+                ["adb", "-s", target, "shell", ";".join(cmds)],
+                capture_output=True, text=True, timeout=15,
+            )
+            logger.info("Lockdown complete — ADB disabled")
+        except Exception as e:
+            logger.warning(f"Lockdown failed: {e}")
 
     # ─── PUBLIC API ──────────────────────────────────────────────────
 

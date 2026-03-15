@@ -299,6 +299,7 @@ class WorkflowStartBody(BaseModel):
     skip_forge: bool = False
     skip_patch: bool = False
     profile_id: str = ""
+    disable_adb: bool = False
 
 
 @router.post("/workflow/start/{device_id}")
@@ -319,6 +320,7 @@ async def workflow_start(device_id: str, body: WorkflowStartBody):
         skip_forge=body.skip_forge,
         skip_patch=body.skip_patch,
         profile_id=body.profile_id,
+        disable_adb=body.disable_adb,
     )
     return {
         "job_id": job.job_id,

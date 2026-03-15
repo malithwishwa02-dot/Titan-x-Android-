@@ -1,6 +1,6 @@
 # 04 — Profile Injector
 
-The `ProfileInjector` class (`core/profile_injector.py`) is the ADB-based injection engine that writes forged Genesis profile data into a live Cuttlefish Android VM, targeting 9 distinct data stores with correct file ownership, permissions, and SELinux labels.
+The `ProfileInjector` class (`core/profile_injector.py`) is the ADB-based injection engine that writes forged Genesis profile data into a live Cuttlefish Android VM, targeting **11 distinct data stores** with correct file ownership, permissions, and SELinux labels.
 
 ---
 
@@ -17,11 +17,13 @@ The `ProfileInjector` class (`core/profile_injector.py`) is the ADB-based inject
 9. [Injection Target 7 — SMS](#9-injection-target-7--sms)
 10. [Injection Target 8 — Gallery](#10-injection-target-8--gallery)
 11. [Injection Target 9 — App Install Dates](#11-injection-target-9--app-install-dates)
-12. [SELinux & DAC Ownership](#12-selinux--dac-ownership)
-13. [Wallet Injection (delegated)](#13-wallet-injection-delegated)
-14. [App Data Forge (delegated)](#14-app-data-forge-delegated)
-15. [Error Handling & Partial Success](#15-error-handling--partial-success)
-16. [ADB Helper Functions](#16-adb-helper-functions)
+12. [Injection Target 10 — WiFi Saved Networks](#12-injection-target-10--wifi-saved-networks)
+13. [Injection Target 11 — App Usage Stats](#13-injection-target-11--app-usage-stats)
+14. [SELinux & DAC Ownership](#14-selinux--dac-ownership)
+15. [Wallet Injection (delegated)](#15-wallet-injection-delegated)
+16. [App Data Forge (delegated)](#16-app-data-forge-delegated)
+17. [Error Handling & Partial Success](#17-error-handling--partial-success)
+18. [ADB Helper Functions](#18-adb-helper-functions)
 
 ---
 
@@ -62,17 +64,20 @@ class InjectionResult:
     wallet_ok:         bool = False    # True if ≥3/4 wallet targets succeed
     apps_ok:           bool = False
     google_account_ok: bool = False
+    wifi_ok:           bool = False    # WiFi saved networks injected
+    app_usage_ok:      bool = False    # App usage stats injected
     errors: List[str] = field(default_factory=list)
 
     @property
     def success_count(self) -> int:
         return sum([self.contacts_ok, self.calls_ok, self.sms_ok,
                     self.cookies_ok, self.history_ok, self.gallery_ok,
-                    self.wallet_ok, self.apps_ok, self.google_account_ok])
+                    self.wallet_ok, self.apps_ok, self.google_account_ok,
+                    self.wifi_ok, self.app_usage_ok])
 
     @property
     def success_rate(self) -> float:
-        return self.success_count / 9
+        return self.success_count / 11
 ```
 
 ---
@@ -300,9 +305,15 @@ adb shell content insert \
 **Duration:** ~20 seconds
 
 ```python
-# For each gallery entry:
-img_data = _make_minimal_jpeg(width=1080, height=1920, quality=85)
-# EXIF timestamp = circadian_weighted_time(now, age_days)
+# For each gallery entry — EXIF-bearing JPEG (GAP-D1):
+img_data = _build_exif_jpeg(
+    width=4032, height=3024,          # Realistic Samsung camera resolution
+    taken_ts=circadian_weighted_ts,    # Backdated timestamp
+    lat=40.7128, lon=-74.0060,        # GPS coords (NYC + random jitter)
+    make="samsung", model="SM-S928B",  # Camera make/model from preset
+)
+# EXIF includes: DateTimeOriginal, GPSLatitude/Longitude, Make, Model,
+#                ImageWidth, ImageLength, ColorSpace, ExifImageWidth/Height
 tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
 tmp.write(img_data)
 tmp.close()
@@ -346,7 +357,46 @@ adb shell pm set-install-time com.chase.sig.android {timestamp_60days_ago}
 
 ---
 
-## 12. SELinux & DAC Ownership
+## 12. Injection Target 10 — WiFi Saved Networks
+
+**Target:** `/data/misc/apexdata/com.android.wifi/WifiConfigStore.xml`
+**Duration:** ~5 seconds
+
+Injects persona-specific saved WiFi networks into `WifiConfigStore.xml` so the device appears to have connected to real ISP routers.
+
+```xml
+<WifiConfiguration>
+  <string name="SSID">&quot;NETGEAR72_5G&quot;</string>
+  <string name="PreSharedKey">&quot;{random_hex_64}&quot;</string>
+  <byte-array name="AllowedKeyManagement" num="1">02</byte-array>
+  <int name="Priority" value="1" />
+</WifiConfiguration>
+```
+
+Up to 4 networks are injected, with ISP-appropriate SSIDs matching the device's location profile (e.g., BT Hub for GB, FRITZ!Box for DE).
+
+**Patcher coordination (GAP-P4):** The anomaly patcher's WiFi phase skips `WifiConfigStore.xml` if the injector has already written it, preventing double-write conflicts.
+
+---
+
+## 13. Injection Target 11 — App Usage Stats
+
+**Target:** Android UsageStats service via `cmd usagestats report-event`
+**Duration:** ~10 seconds
+
+Injects realistic app foreground/background usage events so Settings > Battery > App Usage shows non-zero screen time. Without this, the device appears never-used despite having apps installed.
+
+```bash
+# Foreground event (type 1) and background event (type 2) per package per day
+cmd usagestats report-event com.kiwibrowser.browser 1 {fg_timestamp_ms}
+cmd usagestats report-event com.kiwibrowser.browser 2 {bg_timestamp_ms}
+```
+
+**Packages covered:** Browser (Chrome/Kiwi), YouTube, GMS, Play Store, Maps — each with plausible daily usage ranges (e.g., browser 25–60 min/day, YouTube 15–45 min/day). Events span the last 14 days.
+
+---
+
+## 14. SELinux & DAC Ownership
 
 This is the most critical step for each injection target. Incorrect ownership causes apps to refuse to open their own databases.
 

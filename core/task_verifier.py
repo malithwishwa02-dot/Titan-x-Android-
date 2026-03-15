@@ -137,6 +137,7 @@ class TaskVerifier:
     async def verify_wallet_active(self) -> VerifyResult:
         """Check if Google Pay tapandpay.db exists with card data."""
         output = await self._shell(
+            "ls -la /data/data/com.google.android.apps.walletnfcrel/databases/tapandpay.db 2>/dev/null || "
             "ls -la /data/data/com.google.android.gms/databases/tapandpay.db 2>/dev/null",
             wait=8,
         )
@@ -216,8 +217,10 @@ class TaskVerifier:
         )
 
     async def verify_sms(self, min_count: int = 5) -> VerifyResult:
-        """Check if SMS messages exist."""
+        """Check if SMS messages exist (sqlite3 to avoid content provider hangs)."""
         output = await self._shell(
+            "sqlite3 /data/data/com.android.providers.telephony/databases/mmssms.db "
+            "'SELECT COUNT(*) FROM sms' 2>/dev/null || "
             "content query --uri content://sms --projection _id 2>/dev/null | wc -l",
             wait=10,
         )

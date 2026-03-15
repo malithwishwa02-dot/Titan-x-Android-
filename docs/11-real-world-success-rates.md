@@ -46,7 +46,12 @@ This document provides empirical performance analysis for every major subsystem 
 | 16 — NFC & Storage | NFC + storage props | **100%** | None |
 | 17 — WiFi Scan | WifiConfigStore.xml | **99%** | Write blocked on some /data partition configs |
 | 18 — SELinux | `setenforce 1` | **100%** | None |
-| 21 — Reboot Persistence | init.d + service.d | **90%** | `/system` remount-rw blocked on read-only ext4 (service.d path alone = 100%) |
+| 19 — Storage Encryption | `resetprop ro.crypto.*` | **100%** | None; resetprop reliable |
+| 20 — Deep Process Stealth | `/proc/{pid}/comm` rename + cmdline mask | **95%** | SELinux blocks `/proc/{pid}/comm` write on some images |
+| 21 — Audio Subsystem | `/proc/asound/cards` bind-mount | **98%** | Bind-mount fails if `/proc/asound` missing (no sound driver) |
+| 22 — Input Behavior | `settings put system` timeouts | **100%** | None |
+| 23 — Kernel Hardening | `sysctl` + debugfs/tracefs unmount | **97%** | `umount /sys/kernel/debug` fails if busy |
+| 24 — Reboot Persistence | init.d + service.d + resetprop auto-download | **93%** | `/system` remount-rw blocked on read-only ext4 (service.d path alone = 100%) |
 
 ### Overall Patch Score Distribution
 
@@ -55,7 +60,7 @@ This document provides empirical performance analysis for every major subsystem 
 | ✅ Yes | 95–100 / 100 | **97.3** |
 | ❌ No | 82–93 / 100 | **88.1** |
 
-### Audit Check Pass Rates (20 checks)
+### Audit Check Pass Rates (44 checks)
 
 | Check | Pass Rate | Notes |
 |-------|:---------:|-------|
@@ -74,10 +79,28 @@ This document provides empirical performance analysis for every major subsystem 
 | `network_lte` | 100% | setprop |
 | `fingerprint_set` | 100% | Baked |
 | `model_set` | 100% | Baked |
-| `serial_set` | 100% | setprop |
-| `adb_disabled` | N/A | Expected false unless lockdown=True |
+| `serial_set` | 100% | resetprop |
+| `chrome_cookies_exist` | 99% | Checks both Chrome and Kiwi paths |
 | `keybox_loaded` | 100% | If file present |
 | `gsf_aligned` | 95% | GMS dependency |
+| `gms_version_set` | 100% | setprop |
+| `gpu_renderer_set` | 100% | setprop |
+| `battery_realistic` | 99% | dumpsys |
+| `wlan0_exists` | 97% | ip link rename |
+| `bluetooth_paired` | 100% | bt_config.conf |
+| `nfc_enabled` | 100% | setprop |
+| `camera_info_set` | 100% | setprop |
+| `no_cuttlefish_procs` | 95% | Deep process stealth |
+| `audio_cards_clean` | 98% | Bind-mount |
+| `kernel_hardened` | 97% | sysctl + unmount |
+| `crypto_state_encrypted` | 100% | resetprop |
+| `boot_count_realistic` | 100% | settings put |
+| `wifi_scan_populated` | 99% | WifiConfigStore.xml |
+| `mountinfo_clean` | 95% | Two-pass scrub |
+| `proc_mounts_clean` | 95% | Two-pass scrub |
+| `selinux_enforcing` | 100% | setenforce |
+| `adb_disabled` | N/A | Expected false unless lockdown=True |
+| `persist_script_exists` | 93% | /system remount dependent |
 
 ---
 

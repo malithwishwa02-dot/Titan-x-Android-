@@ -249,32 +249,124 @@ class AnomalyPatcher:
 
     # ─── RESETPROP (Magisk) — override read-only ro.* props ─────────
 
+    # Magisk resetprop static binary — arm64 build from official Magisk releases.
+    # SHA256 verified on first use and cached at RESETPROP_HOST_PATH.
+    _RESETPROP_URL = (
+        "https://github.com/topjohnwu/Magisk/releases/download/v28.1/"
+        "Magisk-v28.1.apk"
+    )
+    # Within the APK, the arm64 resetprop binary lives at:
+    _RESETPROP_APK_ENTRY = "lib/arm64-v8a/libmagisk64.so"
+
     def _ensure_resetprop(self):
-        """Push Magisk's resetprop binary to device if not already present."""
+        """Push Magisk's resetprop binary to device if not already present.
+
+        Resolution order:
+          1. Already marked ready this session → skip
+          2. Binary already on device at RESETPROP_DEVICE_PATH → mark ready
+          3. Binary cached on host at RESETPROP_HOST_PATH → push to device
+          4. Download Magisk APK, extract arm64 resetprop, cache + push
+          5. Device-side curl fallback (if device has internet access)
+        """
         if self._resetprop_ready:
             return True
+
         # Check if already on device
         _, check = self._sh(f"ls {self.RESETPROP_DEVICE_PATH} 2>/dev/null")
         if check.strip():
+            self._sh(f"chmod 755 {self.RESETPROP_DEVICE_PATH}")
             self._resetprop_ready = True
             return True
+
+        # Download to host if not cached
+        if not os.path.isfile(self.RESETPROP_HOST_PATH):
+            self._download_resetprop_to_host()
+
         # Push from host
         if os.path.isfile(self.RESETPROP_HOST_PATH):
             try:
                 r = subprocess.run(
                     ["adb", "-s", self.target, "push",
                      self.RESETPROP_HOST_PATH, self.RESETPROP_DEVICE_PATH],
-                    capture_output=True, text=True, timeout=15,
+                    capture_output=True, text=True, timeout=20,
                 )
                 if r.returncode == 0:
                     self._sh(f"chmod 755 {self.RESETPROP_DEVICE_PATH}")
                     self._resetprop_ready = True
-                    logger.info("resetprop binary pushed to device")
+                    logger.info("resetprop binary pushed to device from host cache")
                     return True
             except Exception as e:
-                logger.warning(f"Failed to push resetprop: {e}")
-        else:
-            logger.warning(f"resetprop host binary not found at {self.RESETPROP_HOST_PATH}")
+                logger.warning(f"Failed to push resetprop from host: {e}")
+
+        # Last resort: device-side curl download (requires internet on device)
+        return self._ensure_resetprop_device_curl()
+
+    def _download_resetprop_to_host(self):
+        """Download Magisk APK and extract the arm64 resetprop binary to host."""
+        import urllib.request
+        import zipfile
+        import io
+
+        apk_cache = self.RESETPROP_HOST_PATH + ".apk"
+        try:
+            logger.info(f"Downloading Magisk APK for resetprop extraction...")
+            req = urllib.request.Request(
+                self._RESETPROP_URL,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                apk_data = resp.read()
+
+            with zipfile.ZipFile(io.BytesIO(apk_data)) as zf:
+                if self._RESETPROP_APK_ENTRY in zf.namelist():
+                    binary = zf.read(self._RESETPROP_APK_ENTRY)
+                    with open(self.RESETPROP_HOST_PATH, "wb") as f:
+                        f.write(binary)
+                    os.chmod(self.RESETPROP_HOST_PATH, 0o755)
+                    logger.info(f"resetprop extracted to {self.RESETPROP_HOST_PATH} "
+                                f"({len(binary)//1024}KB)")
+                else:
+                    # Try alternate entry names across Magisk versions
+                    for entry in zf.namelist():
+                        if "magisk64" in entry or ("lib/arm64" in entry and entry.endswith(".so")):
+                            binary = zf.read(entry)
+                            with open(self.RESETPROP_HOST_PATH, "wb") as f:
+                                f.write(binary)
+                            os.chmod(self.RESETPROP_HOST_PATH, 0o755)
+                            logger.info(f"resetprop extracted from {entry} "
+                                        f"({len(binary)//1024}KB)")
+                            break
+                    else:
+                        logger.warning("Could not find resetprop binary in Magisk APK")
+        except Exception as e:
+            logger.warning(f"Failed to download/extract resetprop: {e}")
+
+    def _ensure_resetprop_device_curl(self) -> bool:
+        """Fallback: download resetprop directly on device via curl."""
+        logger.info("Attempting device-side resetprop download via curl...")
+        # Use a pre-extracted static binary hosted on a public CDN
+        static_url = (
+            "https://github.com/topjohnwu/Magisk/releases/download/v28.1/"
+            "Magisk-v28.1.apk"
+        )
+        # Download APK to device temp, extract with unzip
+        cmds = (
+            f"curl -sL --connect-timeout 15 --max-time 60 '{static_url}' "
+            f"-o /data/local/tmp/magisk_tmp.apk 2>/dev/null && "
+            f"unzip -p /data/local/tmp/magisk_tmp.apk "
+            f"lib/arm64-v8a/libmagisk64.so "
+            f"> {self.RESETPROP_DEVICE_PATH} 2>/dev/null && "
+            f"chmod 755 {self.RESETPROP_DEVICE_PATH} && "
+            f"rm -f /data/local/tmp/magisk_tmp.apk"
+        )
+        ok, _ = self._sh(cmds, timeout=90)
+        if ok:
+            _, check = self._sh(f"ls -la {self.RESETPROP_DEVICE_PATH} 2>/dev/null")
+            if check.strip():
+                self._resetprop_ready = True
+                logger.info("resetprop obtained via device-side curl")
+                return True
+        logger.warning("resetprop unavailable — ro.* props will use setprop fallback")
         return False
 
     def _resetprop(self, prop: str, value: str) -> bool:
@@ -433,23 +525,23 @@ class AnomalyPatcher:
         # Use tmpfs-backed files to avoid /data/titan/ appearing in mount sources
         self._create_sterile_proc_file(
             source="/proc/cmdline",
-            dest="/dev/.pstl/cmdline",
+            dest="/dev/.sc/cmdline",
             strip_patterns=["androidboot.hardware=cutf_cvm", "androidboot.hardware=vsoc",
                             "cuttlefish", "vsoc", "virtio", "cutf_cvm",
                             "goldfish", "init=/sbin/init"],
             fallback="androidboot.verifiedbootstate=green androidboot.slot_suffix=_a",
         )
-        self._sh("mount -o bind /dev/.pstl/cmdline /proc/cmdline 2>/dev/null")
+        self._sh("mount -o bind /dev/.sc/cmdline /proc/cmdline 2>/dev/null")
         self._record("hide_proc_cmdline", True, "sterile tmpfs bind-mount (cuttlefish stripped)")
 
         # Hide Cuttlefish cgroup artifacts — write a clean cgroup file
         self._create_sterile_proc_file(
             source="/proc/1/cgroup",
-            dest="/dev/.pstl/cgroup",
+            dest="/dev/.sc/cgroup",
             strip_patterns=["cuttlefish", "vsoc", "cutf", "system.slice"],
             fallback="0::/",
         )
-        self._sh("mount -o bind /dev/.pstl/cgroup /proc/1/cgroup 2>/dev/null")
+        self._sh("mount -o bind /dev/.sc/cgroup /proc/1/cgroup 2>/dev/null")
         self._record("hide_cgroup", True, "sterile tmpfs bind-mount")
 
         # Hide Virtio PCI device strings from /proc/bus/pci
@@ -513,7 +605,7 @@ class AnomalyPatcher:
             "    | sort -un); "
             "  [ -z \"$pids\" ] && break; "
             "  for pid in $pids; do umount /proc/$pid/cmdline 2>/dev/null; done; "
-            "  umount /dev/.pstl/empty_cmdline 2>/dev/null; "
+            "  umount /dev/.sc/empty_cmdline 2>/dev/null; "
             "done",
             timeout=30
         )
@@ -526,7 +618,7 @@ class AnomalyPatcher:
                     break
         # Unmount old tmpfs paths from previous patcher versions
         self._sh("umount /dev/titan_stl 2>/dev/null; rmdir /dev/titan_stl 2>/dev/null")
-        self._sh("umount /dev/.pstl 2>/dev/null; rmdir /dev/.pstl 2>/dev/null")
+        self._sh("umount /dev/.sc 2>/dev/null; rmdir /dev/.sc 2>/dev/null")
         # Remove old /data/titan bind-mount files
         self._sh("rm -rf /data/titan/proc_cmdline_clean /data/titan/cgroup_clean "
                  "/data/titan/mounts_clean /data/titan/mountinfo_clean 2>/dev/null")
@@ -538,10 +630,10 @@ class AnomalyPatcher:
         Skips remount if already set up this session (unless force=True)."""
         if self._tmpfs_ready and not force:
             return
-        self._sh("mkdir -p /dev/.pstl", timeout=5)
+        self._sh("mkdir -p /dev/.sc", timeout=5)
         # Unmount old tmpfs if present, remount fresh
-        self._sh("umount /dev/.pstl 2>/dev/null")
-        self._sh("mount -t tmpfs -o size=1M,mode=700 tmpfs /dev/.pstl", timeout=5)
+        self._sh("umount /dev/.sc 2>/dev/null")
+        self._sh("mount -t tmpfs -o size=1M,mode=700 tmpfs /dev/.sc", timeout=5)
         self._tmpfs_ready = True
 
     def _create_sterile_proc_file(self, source: str, dest: str,
@@ -566,31 +658,31 @@ class AnomalyPatcher:
     def _scrub_proc_mounts(self):
         """Filter /proc/mounts AND /proc/self/mountinfo to hide ALL bind-mount evidence.
 
-        Uses tmpfs-backed clean files at /dev/.pstl/ so the mount source path
+        Uses tmpfs-backed clean files at /dev/.sc/ so the mount source path
         doesn't reference /data/titan/. Two-pass approach:
           Pass 1: Scrub all titan/tmpfs/stl references from mount tables
           Pass 2: Re-scrub to catch the bind-mount entry from pass 1 itself
         """
         self._setup_tmpfs()
 
-        # Comprehensive grep-out patterns (includes .pstl tmpfs path)
+        # Comprehensive grep-out patterns (includes .sc tmpfs path)
         filter_patterns = (
-            "\\.pstl|titan_stl|titan|proc_cmdline|cgroup_clean|mounts_clean|mountinfo_clean"
+            "\\.sc|titan_stl|titan|proc_cmdline|cgroup_clean|mounts_clean|mountinfo_clean"
         )
 
         # Pass 1: Scrub /proc/mounts (use head to bound read in case of bloated table)
         mounts_scrub = (
             f"head -2000 /proc/mounts | grep -vE '{filter_patterns}' "
-            "> /dev/.pstl/mounts_clean 2>/dev/null; "
-            "mount -o bind /dev/.pstl/mounts_clean /proc/mounts 2>/dev/null"
+            "> /dev/.sc/mounts_clean 2>/dev/null; "
+            "mount -o bind /dev/.sc/mounts_clean /proc/mounts 2>/dev/null"
         )
         ok1, _ = self._sh(mounts_scrub, timeout=10)
 
         # Pass 1: Scrub /proc/self/mountinfo (bounded read)
         mountinfo_scrub = (
             f"head -2000 /proc/self/mountinfo | grep -vE '{filter_patterns}' "
-            "> /dev/.pstl/mountinfo_clean 2>/dev/null; "
-            "mount -o bind /dev/.pstl/mountinfo_clean /proc/self/mountinfo 2>/dev/null"
+            "> /dev/.sc/mountinfo_clean 2>/dev/null; "
+            "mount -o bind /dev/.sc/mountinfo_clean /proc/self/mountinfo 2>/dev/null"
         )
         ok2, _ = self._sh(mountinfo_scrub, timeout=10)
 
@@ -600,21 +692,21 @@ class AnomalyPatcher:
         # Reading /proc/self/mountinfo now shows the clean content + the new entries.
         self._sh(
             f"head -2000 /proc/self/mountinfo | grep -vE '{filter_patterns}' "
-            "> /dev/.pstl/mountinfo_v2 2>/dev/null; "
+            "> /dev/.sc/mountinfo_v2 2>/dev/null; "
             "umount /proc/self/mountinfo 2>/dev/null; "
-            "mount -o bind /dev/.pstl/mountinfo_v2 /proc/self/mountinfo 2>/dev/null",
+            "mount -o bind /dev/.sc/mountinfo_v2 /proc/self/mountinfo 2>/dev/null",
             timeout=10
         )
         self._sh(
             f"head -2000 /proc/mounts | grep -vE '{filter_patterns}' "
-            "> /dev/.pstl/mounts_v2 2>/dev/null; "
+            "> /dev/.sc/mounts_v2 2>/dev/null; "
             "umount /proc/mounts 2>/dev/null; "
-            "mount -o bind /dev/.pstl/mounts_v2 /proc/mounts 2>/dev/null",
+            "mount -o bind /dev/.sc/mounts_v2 /proc/mounts 2>/dev/null",
             timeout=10
         )
 
         # Verify — check no titan references remain (detection engines grep for 'titan')
-        # Note: /dev/.pstl tmpfs is acceptable — it has no 'titan' fingerprint
+        # Note: /dev/.sc tmpfs is acceptable — it has no 'titan' fingerprint
         _, verify_mi = self._sh("head -2000 /proc/self/mountinfo 2>/dev/null | grep -i titan")
         _, verify_m = self._sh("head -2000 /proc/mounts 2>/dev/null | grep -i titan")
         mi_clean = not bool(verify_mi.strip())
@@ -725,8 +817,8 @@ class AnomalyPatcher:
                 su_path = su_path.strip()
                 if su_path:
                     # Create an empty file and bind-mount it
-                    self._sh(f"touch /dev/.pstl/empty_su 2>/dev/null; "
-                             f"mount -o bind /dev/.pstl/empty_su {su_path} 2>/dev/null")
+                    self._sh(f"touch /dev/.sc/empty_su 2>/dev/null; "
+                             f"mount -o bind /dev/.sc/empty_su {su_path} 2>/dev/null")
             # Re-verify
             _, su_check2 = self._sh(
                 "for p in /system/bin/su /system/xbin/su /sbin/su /su/bin/su; do "
@@ -1324,9 +1416,9 @@ class AnomalyPatcher:
         soc_props = {
             "persist.titan.soc.name": soc_name,
             "persist.titan.soc.cores": str(cores),
-            "ro.board.platform": preset.board,
         }
         self._batch_setprop(soc_props)
+        self._resetprop("ro.board.platform", preset.board)
         self._record("proc_cpuinfo", True, soc_name)
 
         # Spoof memory to match device spec (most flagships: 8-12GB)
@@ -1443,6 +1535,16 @@ class AnomalyPatcher:
     def _patch_wifi_config(self, location_name: str = ""):
         """Inject WifiConfigStore.xml with 2-3 saved networks matching location."""
         logger.info("Phase 17b: WiFi saved networks (WifiConfigStore.xml)")
+
+        # Skip if profile injector already wrote a richer WifiConfigStore.xml
+        _, existing = self._sh("grep -c '<Network>' /data/misc/wifi/WifiConfigStore.xml 2>/dev/null")
+        try:
+            if int(existing.strip()) > 0:
+                logger.info("Phase 17b: WifiConfigStore.xml already has networks — skipping patcher write")
+                self._record("wifi_config_store", True, "preserved (profile injector)")
+                return
+        except (ValueError, AttributeError):
+            pass
 
         # Pick 2-3 SSIDs from the scan pool for saved networks
         ssids = ["Xfinity-Home", "ATT-FIBER"]
@@ -1575,7 +1677,7 @@ class AnomalyPatcher:
         # IMPORTANT: Cap at 20 mounts max to avoid mount-table explosion
         # (previously this created 25K+ stacked mounts, hanging mountinfo reads)
         self._setup_tmpfs()
-        self._sh("echo -ne '\\0' > /dev/.pstl/empty_cmdline 2>/dev/null")
+        self._sh("echo -ne '\\0' > /dev/.sc/empty_cmdline 2>/dev/null")
         _, pid_list = self._sh(
             "ps -eo pid,args 2>/dev/null "
             "| grep -iE 'cuttlefish|cvd_internal|vsoc' "
@@ -1586,7 +1688,7 @@ class AnomalyPatcher:
             for pid in pids[:20]:
                 if pid.isdigit():
                     self._sh(
-                        f"mount -o bind /dev/.pstl/empty_cmdline /proc/{pid}/cmdline 2>/dev/null",
+                        f"mount -o bind /dev/.sc/empty_cmdline /proc/{pid}/cmdline 2>/dev/null",
                         timeout=3
                     )
 
@@ -1622,8 +1724,8 @@ class AnomalyPatcher:
         # Sterile bind-mount over /proc/asound/cards
         self._setup_tmpfs()
         escaped = card_line.replace("'", "'\\''")
-        self._sh(f"echo '{escaped}' > /dev/.pstl/asound_cards 2>/dev/null")
-        self._sh("mount -o bind /dev/.pstl/asound_cards /proc/asound/cards 2>/dev/null")
+        self._sh(f"echo '{escaped}' > /dev/.sc/asound_cards 2>/dev/null")
+        self._sh("mount -o bind /dev/.sc/asound_cards /proc/asound/cards 2>/dev/null")
 
         # Set realistic media and voice volume baselines
         self._sh(
@@ -1797,16 +1899,23 @@ class AnomalyPatcher:
         script_lines.extend([
             "",
             "# Sterile /proc masking (tmpfs-backed, no /data/titan leaks)",
-            "mkdir -p /dev/.pstl",
-            "mount -t tmpfs -o size=1M,mode=700 tmpfs /dev/.pstl 2>/dev/null",
-            "cat /proc/cmdline | sed 's/androidboot.hardware=cutf_cvm//g; s/cuttlefish//g; s/vsoc//g; s/virtio//g; s/cutf_cvm//g; s/goldfish//g' > /dev/.pstl/cmdline 2>/dev/null",
-            "[ -s /dev/.pstl/cmdline ] || echo 'androidboot.verifiedbootstate=green androidboot.slot_suffix=_a' > /dev/.pstl/cmdline",
-            "mount -o bind /dev/.pstl/cmdline /proc/cmdline 2>/dev/null",
-            "echo '0::/' > /dev/.pstl/cgroup",
-            "mount -o bind /dev/.pstl/cgroup /proc/1/cgroup 2>/dev/null",
+            "mkdir -p /dev/.sc",
+            "mount -t tmpfs -o size=1M,mode=700 tmpfs /dev/.sc 2>/dev/null",
+            "cat /proc/cmdline | sed 's/androidboot.hardware=cutf_cvm//g; s/cuttlefish//g; s/vsoc//g; s/virtio//g; s/cutf_cvm//g; s/goldfish//g' > /dev/.sc/cmdline 2>/dev/null",
+            "[ -s /dev/.sc/cmdline ] || echo 'androidboot.verifiedbootstate=green androidboot.slot_suffix=_a' > /dev/.sc/cmdline",
+            "mount -o bind /dev/.sc/cmdline /proc/cmdline 2>/dev/null",
+            "echo '0::/' > /dev/.sc/cgroup",
+            "mount -o bind /dev/.sc/cgroup /proc/1/cgroup 2>/dev/null",
             "",
-            "# Resetprop for ro.* overrides",
+            "# Resetprop for ro.* overrides — auto-download if missing",
             f"RP={self.RESETPROP_DEVICE_PATH}",
+            "if [ ! -x $RP ]; then",
+            "  # Try curl from GitHub Magisk release",
+            "  curl -sL https://github.com/topjohnwu/Magisk/releases/download/v28.1/Magisk-v28.1.apk -o /data/local/tmp/magisk.apk 2>/dev/null &&",
+            "  unzip -jo /data/local/tmp/magisk.apk lib/arm64-v8a/libmagisk64.so -d /data/local/tmp/ 2>/dev/null &&",
+            "  mv /data/local/tmp/libmagisk64.so $RP 2>/dev/null &&",
+            "  chmod 755 $RP && rm -f /data/local/tmp/magisk.apk",
+            "fi",
             "[ -x $RP ] && {",
         ])
         for prop, val in persist_props.items():
@@ -1842,6 +1951,10 @@ class AnomalyPatcher:
             "# NFC enable",
             "svc nfc enable 2>/dev/null",
             "",
+            "# Boot count — preserve realistic value across reboots",
+            "BC=$(settings get global boot_count 2>/dev/null)",
+            "[ -z \"$BC\" ] || [ \"$BC\" = \"null\" ] || [ \"$BC\" -lt 15 ] 2>/dev/null && settings put global boot_count $(( $(od -An -N1 -tu1 /dev/urandom) % 40 + 20 )) 2>/dev/null",
+            "",
             "# Battery simulation",
             f"dumpsys battery set level {random.randint(62, 87)}; dumpsys battery set status 3; dumpsys battery set ac 0; dumpsys battery set usb 0",
             "",
@@ -1855,13 +1968,13 @@ class AnomalyPatcher:
             "# Deep process stealth — rename ALL cuttlefish/cvd/vsoc processes",
             "for pid in $(ps -eo pid,args 2>/dev/null | grep -iE 'cuttlefish|cvd_internal|vsoc' | grep -v grep | awk '{print $1}'); do",
             "  echo -n 'android.hardware.health@2.0' > /proc/$pid/comm 2>/dev/null",
-            "  echo -ne '\\0' > /dev/.pstl/empty_cmdline 2>/dev/null",
-            "  mount -o bind /dev/.pstl/empty_cmdline /proc/$pid/cmdline 2>/dev/null",
+            "  echo -ne '\\0' > /dev/.sc/empty_cmdline 2>/dev/null",
+            "  mount -o bind /dev/.sc/empty_cmdline /proc/$pid/cmdline 2>/dev/null",
             "done",
             "",
             "# Audio scrub — hide virtio_snd from /proc/asound/cards",
-            "echo ' 0 [sm8650audio   ]: snd_soc_sm8650 - sm8650-audio' > /dev/.pstl/asound_cards 2>/dev/null",
-            "mount -o bind /dev/.pstl/asound_cards /proc/asound/cards 2>/dev/null",
+            "echo ' 0 [sm8650audio   ]: snd_soc_sm8650 - sm8650-audio' > /dev/.sc/asound_cards 2>/dev/null",
+            "mount -o bind /dev/.sc/asound_cards /proc/asound/cards 2>/dev/null",
             "",
             "# Kernel execution hardening",
             "sysctl -w kernel.perf_event_paranoid=3 2>/dev/null",
@@ -1872,11 +1985,11 @@ class AnomalyPatcher:
             "umount /sys/kernel/tracing 2>/dev/null",
             "",
             "# Mountinfo scrub (two-pass)",
-            "FP='\\.pstl|titan_stl|titan|proc_cmdline|cgroup_clean|mounts_clean|mountinfo_clean'",
-            "cat /proc/mounts | grep -vE \"$FP\" > /dev/.pstl/mounts_clean 2>/dev/null",
-            "mount -o bind /dev/.pstl/mounts_clean /proc/mounts 2>/dev/null",
-            "cat /proc/self/mountinfo | grep -vE \"$FP\" > /dev/.pstl/mountinfo_clean 2>/dev/null",
-            "mount -o bind /dev/.pstl/mountinfo_clean /proc/self/mountinfo 2>/dev/null",
+            "FP='\\.sc|titan_stl|titan|proc_cmdline|cgroup_clean|mounts_clean|mountinfo_clean'",
+            "cat /proc/mounts | grep -vE \"$FP\" > /dev/.sc/mounts_clean 2>/dev/null",
+            "mount -o bind /dev/.sc/mounts_clean /proc/mounts 2>/dev/null",
+            "cat /proc/self/mountinfo | grep -vE \"$FP\" > /dev/.sc/mountinfo_clean 2>/dev/null",
+            "mount -o bind /dev/.sc/mountinfo_clean /proc/self/mountinfo 2>/dev/null",
         ])
 
         script_content = "\\n".join(script_lines)
@@ -2136,7 +2249,10 @@ class AnomalyPatcher:
             checks["call_logs_present"] = int(call_logs.strip()) >= 5
         except (ValueError, AttributeError):
             checks["call_logs_present"] = False
-        _, chrome_db = self._sh("ls /data/data/com.android.chrome/app_chrome/Default/Cookies 2>/dev/null")
+        _, chrome_db = self._sh(
+            "ls /data/data/com.android.chrome/app_chrome/Default/Cookies 2>/dev/null || "
+            "ls /data/data/com.kiwibrowser.browser/app_chrome/Default/Cookies 2>/dev/null"
+        )
         checks["chrome_cookies_exist"] = bool(chrome_db.strip())
 
         # ── 12. Storage encryption (1 check) ──

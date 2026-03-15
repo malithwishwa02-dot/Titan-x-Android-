@@ -10,9 +10,9 @@ Complete reference documentation for the Titan V11.3 Advanced Android Cloud Devi
 |------|-------|-------------|
 | [00-overview.md](00-overview.md) | Platform Overview | Architecture, infrastructure, service map, migration history |
 | [01-device-manager.md](01-device-manager.md) | Device Manager | Cuttlefish VM lifecycle, device presets, carrier/location profiles |
-| [02-anomaly-patcher.md](02-anomaly-patcher.md) | Anomaly Patcher | All 21 phases, 70+ detection vectors, sterile /proc technique |
+| [02-anomaly-patcher.md](02-anomaly-patcher.md) | Anomaly Patcher | All 26 phases, 103+ detection vectors, sterile /proc technique |
 | [03-genesis-pipeline.md](03-genesis-pipeline.md) | Genesis Pipeline | Full forge→inject→age→verify flow, SmartForge, circadian weighting |
-| [04-profile-injector.md](04-profile-injector.md) | Profile Injector | All 9 injection targets, SELinux/DAC ownership, Google account injection |
+| [04-profile-injector.md](04-profile-injector.md) | Profile Injector | All 11 injection targets, SELinux/DAC ownership, Google account injection |
 | [05-wallet-injection.md](05-wallet-injection.md) | Wallet Injection | Google Pay, keybox, GSF alignment, Samsung Pay limitation, success matrix |
 | [06-ai-agent.md](06-ai-agent.md) | AI Device Agent | See-Think-Act loop, model hierarchy, TouchSimulator, SensorSimulator |
 | [07-titan-console.md](07-titan-console.md) | Titan Console | Every tab in all 12 API sections — complete UI reference |
@@ -44,7 +44,7 @@ https://72.62.72.48/
 core/
 ├── device_manager.py        # Cuttlefish VM management
 ├── device_presets.py        # 20+ device identities + carriers + locations
-├── anomaly_patcher.py       # 21-phase / 70+ vector stealth patcher
+├── anomaly_patcher.py       # 26-phase / 103+ vector stealth patcher
 ├── android_profile_forge.py # Genesis profile data generator
 ├── profile_injector.py      # ADB-based profile injection
 ├── wallet_provisioner.py    # Google Pay + Play Store + Chrome + GMS billing
@@ -57,5 +57,10 @@ core/
 ├── trajectory_logger.py     # Training data recording
 ├── smartforge_bridge.py     # AI persona generator bridge
 ├── aging_report.py          # Comprehensive device aging report
-└── scenario_runner.py       # Batch task execution for training
-```
+├── scenario_runner.py       # Batch task execution for training
+├── gapps_bootstrap.py       # GApps installer with XAPK split-APK support
+└── workflow_engine.py       # Full pipeline orchestrator (forge→inject→patch→verify)
+
+scripts/
+├── test_e2e_pipeline.py     # E2E integration test (forge→inject→patch→audit→wallet)
+└── ...                      # Bootstrap, build, deploy scripts

@@ -15,4 +15,4 @@ COPY console/ /opt/titan/console/
 ENV PYTHONPATH=/opt/titan/server:/opt/titan/core:/opt/titan/v11-core
 EXPOSE 8080
 
-CMD ["uvicorn", "titan_api:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+CMD ["uvicorn", "titan_api:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2", "--loop", "uvloop", "--http", "httptools"]

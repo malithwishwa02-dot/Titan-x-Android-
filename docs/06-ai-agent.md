@@ -55,7 +55,7 @@ The `DeviceAgent` class (`core/device_agent.py`) is an autonomous Android device
 ```python
 GPU_OLLAMA_URL   = "http://127.0.0.1:11435"  # Vast.ai GPU tunnel
 CPU_OLLAMA_URL   = "http://127.0.0.1:11434"  # Local CPU fallback
-DEFAULT_MODEL    = "hermes3:8b"
+DEFAULT_MODEL    = "titan-agent:7b"              # Fine-tuned action model
 MAX_STEPS        = 50                         # Per task
 STEP_TIMEOUT     = 30                         # Seconds per step
 ```
@@ -63,6 +63,29 @@ STEP_TIMEOUT     = 30                         # Seconds per step
 ---
 
 ## 2. See: ScreenAnalyzer
+
+### Crash/ANR Dialog Auto-Dismiss (GAP-A4)
+
+Before each See→Think→Act iteration, `_execute_step` checks for crash/ANR dialogs that would block the agent. It scans screen text for known patterns:
+
+```python
+CRASH_PATTERNS = [
+    "isn't responding",
+    "has stopped",
+    "keeps stopping",
+    "close app",
+    "app isn't responding",
+]
+```
+
+If detected, the agent:
+1. Looks for dismiss buttons ("Close", "OK", "Close app", "Wait") and taps them
+2. Falls back to pressing Back key if no button found
+3. Logs the dismissal and continues the task
+
+This prevents the agent from getting stuck on unexpected app crashes during multi-step tasks.
+
+### Screen Capture
 
 `ScreenAnalyzer` (`core/screen_analyzer.py`) captures and parses the device screen state.
 
@@ -104,6 +127,23 @@ Output XML is parsed to extract: element bounds, text, content-description, clas
 ---
 
 ## 3. Think: LLM Decision Engine
+
+### Ollama Retry with Exponential Backoff (GAP-A6)
+
+`_query_ollama()` now implements **3-attempt retry with exponential backoff** per URL before falling back from GPU to CPU:
+
+```
+Attempt 1 (GPU :11435) → fail → wait 2s
+Attempt 2 (GPU :11435) → fail → wait 4s
+Attempt 3 (GPU :11435) → fail → switch to CPU
+Attempt 1 (CPU :11434) → fail → wait 2s
+Attempt 2 (CPU :11434) → fail → wait 4s
+Attempt 3 (CPU :11434) → fail → raise error
+```
+
+This handles transient network issues, Ollama server restarts, and Vast.ai tunnel reconnections without immediately dropping to the slower CPU model.
+
+### Prompt Construction
 
 The LLM receives a multimodal prompt containing:
 1. The current task description

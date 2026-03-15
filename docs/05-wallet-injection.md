@@ -50,9 +50,12 @@ WalletProvisioner.provision_card()
 
 ## 2. Target 1 — Google Pay (tapandpay.db)
 
-**Path:** `/data/data/com.google.android.apps.walletnfcrel/databases/tapandpay.db`
+**Primary path:** `/data/data/com.google.android.apps.walletnfcrel/databases/tapandpay.db`
+**Fallback path:** `/data/data/com.google.android.gms/databases/tapandpay.db`
 
 The `tapandpay.db` is the core Google Pay database. It stores tokenized card data (DPANs — Device Primary Account Numbers) used for NFC contactless payments.
+
+**Dual-path check (GAP-P11):** `WalletVerifier` and `TaskVerifier` now check both `walletnfcrel` (primary) and `gms` (fallback) paths, since different GMS versions store `tapandpay.db` in different packages.
 
 ### Process Flow
 

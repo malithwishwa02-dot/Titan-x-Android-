@@ -51,7 +51,7 @@ services:
     command: >
       bash -c "
         pip install -q fastapi uvicorn pydantic pillow 2>/dev/null &&
-        python3 -m uvicorn server.titan_api:app --host 0.0.0.0 --port 8080 --workers 1
+        python3 -m uvicorn server.titan_api:app --host 0.0.0.0 --port 8080 --workers 2 --loop uvloop --http httptools
       "
 
   # ─── WS-SCRCPY (H264 Cloud Phone) ─────────────────────────────

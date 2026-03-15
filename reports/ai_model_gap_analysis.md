@@ -255,3 +255,16 @@ Add forensic/security analysis terminology to specialist training data. Include 
 | titan-specialist:7b | Domain specialist | — | — | 33% (1/3) | D |
 
 **Overall: 33% (6/18)** — Up from 27% after P0 fixes. The titan-agent:7b action model improved significantly in live agent tasks (33%→67%) but inference accuracy remains low due to context blindness and multi-step planning. The highest-priority fix is P1 (training data cleanup) which would address the root cause.
+
+---
+
+## Post-Report Fixes Applied
+
+The following agent-level improvements have been implemented since this report:
+
+| GAP ID | Fix | Impact |
+|--------|-----|--------|
+| **GAP-A4** | Crash/ANR dialog auto-dismissal | Agent no longer gets stuck on "app isn't responding" / "has stopped" dialogs. Scans for 5 known patterns and auto-taps dismiss buttons before each step. |
+| **GAP-A6** | Ollama retry with exponential backoff + CPU fallback | 3 retries per URL (2s→4s→8s backoff) before GPU→CPU fallback. Handles tunnel reconnections and transient Ollama failures without dropping tasks. |
+
+These fixes improve agent **stability** (fewer stuck tasks) and **reliability** (fewer LLM timeout failures) but do not directly improve inference accuracy scores.

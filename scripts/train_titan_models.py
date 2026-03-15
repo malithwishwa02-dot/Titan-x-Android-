@@ -277,7 +277,7 @@ def train_action_model(data_dir: str, output_dir: str,
         logging_steps=5,
         save_strategy="epoch",
         eval_strategy="epoch" if val_ds else "no",
-        fp16=True,
+        bf16=True,
         max_length=max_seq_len,
         dataset_text_field="text",
         seed=42,
@@ -427,7 +427,7 @@ def train_vision_model(data_dir: str, output_dir: str,
         lr_scheduler_type="cosine",
         logging_steps=5,
         save_strategy="epoch",
-        fp16=True,
+        bf16=True,
         max_length=max_seq_len,
         seed=42,
         report_to="none",
@@ -465,6 +465,160 @@ def train_vision_model(data_dir: str, output_dir: str,
         json.dump(meta, f, indent=2)
 
     logger.info("Vision model training COMPLETE")
+    return True
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SPECIALIST MODEL TRAINING (TEXT-ONLY LoRA — domain knowledge)
+# ═══════════════════════════════════════════════════════════════════════
+
+def load_specialist_dataset(data_dir: str) -> List[Dict]:
+    """Load specialist training examples from SFT JSONL."""
+    sft_path = Path(data_dir) / "specialist_sft.jsonl"
+    if not sft_path.exists():
+        logger.error(f"Specialist SFT data not found at {sft_path}")
+        logger.error("Run: python bootstrap_specialist_data.py --output " + data_dir)
+        return []
+    examples = []
+    with open(sft_path) as f:
+        for line in f:
+            try:
+                examples.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    logger.info(f"Loaded {len(examples)} specialist training examples")
+    return examples
+
+
+def train_specialist_model(data_dir: str, output_dir: str,
+                           base_model: str = "Qwen/Qwen2.5-7B-Instruct",
+                           epochs: int = 10, lr: float = 2e-4,
+                           rank: int = 64, alpha: int = 128,
+                           batch_size: int = 2, grad_accum: int = 4,
+                           max_seq_len: int = 2048):
+    """Fine-tune specialist model with LoRA on domain knowledge."""
+    logger.info(f"=== SPECIALIST MODEL TRAINING ===")
+    logger.info(f"Base: {base_model} | LoRA r={rank} \u03b1={alpha}")
+    logger.info(f"Epochs: {epochs} | LR: {lr} | Batch: {batch_size}\u00d7{grad_accum}")
+
+    dataset = load_specialist_dataset(data_dir)
+    if len(dataset) < 10:
+        logger.error(f"Only {len(dataset)} examples \u2014 need at least 10.")
+        return False
+
+    split = int(len(dataset) * 0.9)
+    train_data = dataset[:split]
+    val_data = dataset[split:]
+    logger.info(f"Train: {len(train_data)} | Val: {len(val_data)}")
+
+    try:
+        from trl import SFTTrainer, SFTConfig
+        from datasets import Dataset
+    except ImportError as e:
+        logger.error(f"Missing dependencies: {e}")
+        return False
+
+    _use_unsloth = False
+    model = None
+    tokenizer = None
+
+    try:
+        import warnings
+        warnings.filterwarnings("ignore")
+        from unsloth import FastLanguageModel
+        logger.info(f"Loading {base_model} via unsloth (4-bit QLoRA)...")
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=base_model, max_seq_length=max_seq_len,
+            dtype=None, load_in_4bit=True,
+        )
+        model = FastLanguageModel.get_peft_model(
+            model, r=rank, lora_alpha=alpha,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                            "gate_proj", "up_proj", "down_proj"],
+            lora_dropout=0.05, bias="none",
+            use_gradient_checkpointing="unsloth",
+        )
+        _use_unsloth = True
+        logger.info("Unsloth loaded successfully")
+    except Exception as e:
+        logger.warning(f"Unsloth unavailable ({e.__class__.__name__}), using standard PEFT")
+
+    if not _use_unsloth:
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+            from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
+        except ImportError as e:
+            logger.error(f"Missing PEFT dependencies: {e}")
+            return False
+
+        logger.info(f"Loading {base_model} via standard PEFT (4-bit)...")
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16, bnb_4bit_use_double_quant=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model, quantization_config=bnb_config,
+            device_map="auto", trust_remote_code=True,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        model = prepare_model_for_kbit_training(model)
+        lora_config = LoraConfig(
+            r=rank, lora_alpha=alpha,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                            "gate_proj", "up_proj", "down_proj"],
+            lora_dropout=0.05, bias="none", task_type=TaskType.CAUSAL_LM,
+        )
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
+
+    def _format_chat(example):
+        text = tokenizer.apply_chat_template(
+            example["conversations"], tokenize=False, add_generation_prompt=False
+        )
+        return {"text": text}
+
+    train_ds = Dataset.from_list(train_data).map(_format_chat)
+    val_ds = Dataset.from_list(val_data).map(_format_chat) if val_data else None
+
+    os.makedirs(output_dir, exist_ok=True)
+    training_args = SFTConfig(
+        output_dir=output_dir, num_train_epochs=epochs,
+        per_device_train_batch_size=batch_size,
+        gradient_accumulation_steps=grad_accum,
+        learning_rate=lr, weight_decay=0.01, warmup_ratio=0.1,
+        lr_scheduler_type="cosine", logging_steps=5,
+        save_strategy="epoch",
+        eval_strategy="epoch" if val_ds else "no",
+        bf16=True, max_length=max_seq_len,
+        dataset_text_field="text", seed=42, report_to="none",
+        eos_token=tokenizer.eos_token,
+    )
+
+    trainer = SFTTrainer(
+        model=model, processing_class=tokenizer,
+        train_dataset=train_ds, eval_dataset=val_ds, args=training_args,
+    )
+
+    logger.info("Starting specialist training...")
+    trainer.train()
+
+    logger.info(f"Saving LoRA adapter to {output_dir}")
+    model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+
+    meta = {
+        "base_model": base_model, "task": "specialist",
+        "lora_rank": rank, "lora_alpha": alpha, "epochs": epochs,
+        "learning_rate": lr, "train_examples": len(train_data),
+        "val_examples": len(val_data), "max_seq_length": max_seq_len,
+    }
+    with open(Path(output_dir) / "titan_training_meta.json", "w") as f:
+        json.dump(meta, f, indent=2)
+
+    logger.info("Specialist model training COMPLETE")
     return True
 
 
@@ -513,7 +667,7 @@ def export_to_gguf(model_dir: str, output_path: str,
     logger.info(f"GGUF saved to {output_path}")
 
     # Generate Ollama Modelfile
-    model_name = "titan-agent" if task_type == "action" else "titan-screen"
+    model_name = {"action": "titan-agent", "specialist": "titan-specialist", "vision": "titan-screen"}.get(task_type, "titan-agent")
     gguf_file = list(Path(output_path).glob("*.gguf"))
     if gguf_file:
         modelfile_content = f"""FROM ./{gguf_file[0].name}
@@ -575,7 +729,7 @@ def show_stats(data_dir: str):
 def main():
     parser = argparse.ArgumentParser(description="Titan AI Model Training")
     parser.add_argument("--task", required=True,
-                        choices=["action", "vision", "export", "stats"],
+                        choices=["action", "vision", "specialist", "export", "stats"],
                         help="Training task type")
     parser.add_argument("--data", default="/opt/titan/data/trajectories",
                         help="Trajectory data directory")
@@ -616,6 +770,17 @@ def main():
         base = args.model or "Qwen/Qwen2-VL-7B-Instruct"
         out = args.output or "/opt/titan/models/titan-screen-7b-lora"
         ok = train_vision_model(
+            data_dir=args.data, output_dir=out, base_model=base,
+            epochs=args.epochs, lr=args.lr, rank=args.rank, alpha=args.alpha,
+            batch_size=args.batch_size, grad_accum=args.grad_accum,
+            max_seq_len=args.max_seq_len,
+        )
+        sys.exit(0 if ok else 1)
+
+    elif args.task == "specialist":
+        base = args.model or "Qwen/Qwen2.5-7B-Instruct"
+        out = args.output or "/opt/titan/models/titan-specialist-7b-lora"
+        ok = train_specialist_model(
             data_dir=args.data, output_dir=out, base_model=base,
             epochs=args.epochs, lr=args.lr, rank=args.rank, alpha=args.alpha,
             batch_size=args.batch_size, grad_accum=args.grad_accum,

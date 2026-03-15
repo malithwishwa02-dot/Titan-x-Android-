@@ -24,10 +24,10 @@ Titan V11.3 is a platform for orchestrating a fleet of cloud-resident Android vi
 
 - **Device Virtualization** — Full Android 14/15 KVM VMs via Google Cuttlefish, with ARM translation and GMS
 - **Identity Synthesis** — 20+ device presets with accurate fingerprints, baked at VM boot time
-- **Anomaly Suppression** — 21-phase patcher covering 70+ detection vectors used by fraud systems, RASP, and Play Integrity
+- **Anomaly Suppression** — 26-phase patcher covering 103+ detection vectors used by fraud systems, RASP, and Play Integrity
 - **Genesis Profile Forge** — AI-driven persona generation with 90–365 days of circadian-weighted behavioral data
 - **Wallet Injection** — Google Pay, Play Store billing, Chrome autofill CC injection with post-verification
-- **AI Device Agent** — LLM-powered autonomous Android control (See→Think→Act loop via Ollama)
+- **AI Device Agent** — LLM-powered autonomous Android control (See→Think→Act loop via Ollama, with crash/ANR auto-dismiss and retry+fallback)
 - **Deepfake KYC** — Real-time GPU face-swap injection into the Android camera HAL for liveness bypass
 - **Intelligence Suite** — OSINT, Cerberus card validation, BIN intelligence, 3DS strategy, target analysis
 
@@ -64,14 +64,14 @@ The platform is designed for large-scale, simultaneous operation of 4–8 device
 │  │  titan-cvd-1 │  │  titan-cvd-2 │  │  titan-cvd-N │           │
 │  │  ADB :6520   │  │  ADB :6521   │  │  ADB :652N   │           │
 │  │  VNC :6444   │  │  VNC :6445   │  │  VNC :644N   │           │
-│  │  Android 14  │  │  Android 14  │  │  Android 14  │           │
+│  │  Android 14/15│  │  Android 14/15│  │  Android 14/15│           │
 │  └──────────────┘  └──────────────┘  └──────────────┘           │
 └──────────────────────────────────────────────────────────────────┘
        │ autossh tunnel
        ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│         Vast.ai GPU Instance (RTX 5060, Quebec CA)               │
-│  VPS:11435 → GPU:11434  (Ollama — hermes3:8b, qwen2.5:7b)        │
+│         Vast.ai GPU Instance (RTX 3060 12GB, Quebec CA)           │
+│  VPS:11435 → GPU:11434  (Ollama — titan-agent:7b, minicpm-v:8b)   │
 │  VPS:18080 → GPU:8080   (Titan API mirror)                       │
 │  VPS:8765  → GPU:8765   (GPU face-swap inference server)         │
 └──────────────────────────────────────────────────────────────────┘
@@ -89,7 +89,7 @@ POST /api/genesis/inject/{device_id}
      ├── GoogleAccountInjector           # accounts_ce.db + Chrome prefs
      ├── Chrome cookies/history/autofill # SQLite push via ADB
      ├── Contacts + SMS + Call logs      # content provider insert
-     ├── Gallery JPEGs                   # adb push
+     ├── Gallery JPEGs (EXIF-tagged)     # adb push (GPS, camera model, DateTimeOriginal)
      ├── WalletProvisioner               # tapandpay.db + COIN.xml + GMS
      └── AppDataForger                   # 30+ app SharedPrefs + DBs
   → Background thread (~280s)
@@ -148,8 +148,9 @@ modprobe v4l2loopback devices=4 video_nr=10,11,12,13
 | `ws-scrcpy` | Docker | 8000 | H264 Android screen streaming |
 | `cuttlefish` | KVM (launch_cvd) | 6520 | Cuttlefish Android 15 VM |
 | `titan-gpu-tunnel` | systemd | — | autossh → Vast.ai GPU tunnels |
-| Ollama (CPU) | Docker | 11434 | Local qwen2.5:7b for AI fallback |
-| Ollama (GPU) | Vast.ai | 11435 (tunnel) | hermes3:8b primary AI model |
+| Ollama (CPU) | Docker | 11434 | Local CPU fallback (qwen2.5:7b, hermes3:8b) |
+| Ollama (GPU) | Vast.ai | 11435 (tunnel) | titan-agent:7b, titan-specialist:7b, minicpm-v:8b |
+| `/health` | FastAPI | 8080 | Health check endpoint (ADB, Ollama, disk, memory) |
 
 **After VPS reboot:**
 ```bash
@@ -214,10 +215,10 @@ All VMOS and Redroid code has been removed from active code paths. Legacy module
 | `TITAN_KEYBOX_PATH` | `/opt/titan/data/keybox.xml` | Hardware keybox path |
 | `TITAN_GPU_OLLAMA` | `http://127.0.0.1:11435` | GPU Ollama endpoint |
 | `TITAN_CPU_OLLAMA` | `http://127.0.0.1:11434` | CPU Ollama fallback |
-| `TITAN_AGENT_MODEL` | `hermes3:8b` | Default AI agent model |
+| `TITAN_AGENT_MODEL` | `titan-agent:7b` | Default AI agent model |
 | `TITAN_AGENT_MAX_STEPS` | `50` | Max steps per agent task |
 | `TITAN_TRAINED_ACTION` | `titan-agent:7b` | Fine-tuned action model |
-| `TITAN_TRAINED_VISION` | `titan-screen:7b` | Fine-tuned vision model |
+| `TITAN_TRAINED_VISION` | `minicpm-v:8b` | Vision model for screen analysis |
 | `CVD_HOME_BASE` | `/opt/titan/cuttlefish` | Cuttlefish VM home base |
 | `CVD_BIN_DIR` | `/opt/android-cuttlefish/bin` | CVD binary directory |
 | `CVD_IMAGES_DIR` | `/opt/titan/cuttlefish/images` | Android image directory |
@@ -251,7 +252,7 @@ All VMOS and Redroid code has been removed from active code paths. Legacy module
 | Capability | Status | Success Rate |
 |-----------|--------|-------------|
 | Cuttlefish VM creation | ✅ Active | ~100% |
-| Device identity spoofing (70+ vectors) | ✅ Active | 95-100% |
+| Device identity spoofing (103+ vectors) | ✅ Active | 95-100% |
 | Genesis profile forge (10 categories) | ✅ Active | 100% |
 | Full profile injection | ✅ Active | ~97% |
 | Google Pay wallet injection | ✅ Active | ~100% file inject |

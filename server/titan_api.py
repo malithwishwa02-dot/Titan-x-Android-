@@ -79,6 +79,51 @@ for r in [devices, stealth, genesis, agent, intel, network, cerberus,
 # CONSOLE — Serves the SPA
 # ═══════════════════════════════════════════════════════════════════════
 
+@app.get("/health")
+async def health_check():
+    """System health check: ADB, Ollama, disk, memory."""
+    import shutil, subprocess as _sp
+    health = {"status": "ok", "checks": {}}
+    # ADB
+    try:
+        devs = dm.list_devices()
+        adb_targets = [d.get("adb_target", "") for d in devs if d.get("status") == "online"]
+        adb_ok = False
+        for t in adb_targets[:1]:
+            r = _sp.run(["adb", "-s", t, "shell", "echo ok"], capture_output=True, text=True, timeout=5)
+            adb_ok = "ok" in r.stdout
+        health["checks"]["adb"] = {"ok": adb_ok, "devices": len(devs)}
+    except Exception as e:
+        health["checks"]["adb"] = {"ok": False, "error": str(e)}
+    # Ollama
+    try:
+        import httpx
+        r = httpx.get(os.environ.get("TITAN_GPU_OLLAMA", "http://127.0.0.1:11435") + "/api/tags", timeout=3)
+        models = [m["name"] for m in r.json().get("models", [])]
+        health["checks"]["ollama"] = {"ok": True, "models": len(models)}
+    except Exception:
+        health["checks"]["ollama"] = {"ok": False, "models": 0}
+    # Disk
+    try:
+        usage = shutil.disk_usage("/")
+        free_gb = round(usage.free / (1024**3), 1)
+        health["checks"]["disk"] = {"ok": free_gb > 5, "free_gb": free_gb}
+    except Exception:
+        health["checks"]["disk"] = {"ok": False}
+    # Memory
+    try:
+        with open("/proc/meminfo") as f:
+            lines = f.readlines()
+        mem = {l.split(":")[0].strip(): int(l.split(":")[1].strip().split()[0]) for l in lines[:3]}
+        avail_gb = round(mem.get("MemAvailable", 0) / (1024**2), 1)
+        health["checks"]["memory"] = {"ok": avail_gb > 1, "available_gb": avail_gb}
+    except Exception:
+        health["checks"]["memory"] = {"ok": False}
+    if not all(c.get("ok") for c in health["checks"].values()):
+        health["status"] = "degraded"
+    return health
+
+
 @app.get("/", response_class=HTMLResponse)
 async def console_root():
     index = CONSOLE_DIR / "index.html"
