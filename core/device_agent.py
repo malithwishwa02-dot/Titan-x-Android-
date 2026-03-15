@@ -10,9 +10,9 @@ Supports:
   - Human-like touch/type via TouchSimulator
 
 AI Models (via Vast.ai GPU Ollama tunnel):
-  - hermes3:8b      — screen understanding + action planning (primary)
-  - dolphin-llama3:8b — uncensored operator for complex tasks
-  - deepseek-r1:7b  — fast decisions for simple actions
+  - titan-agent:7b   — trained action planning model (primary)
+  - titan-specialist:7b — anomaly patching + wallet specialist
+  - minicpm-v:8b     — vision model for screenshot analysis
 
 Usage:
     agent = DeviceAgent(adb_target="127.0.0.1:5555")

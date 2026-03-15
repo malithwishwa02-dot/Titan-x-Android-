@@ -22,22 +22,9 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from adb_utils import adb as _adb
+
 logger = logging.getLogger("titan.touch-simulator")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# ADB HELPERS
-# ═══════════════════════════════════════════════════════════════════════
-
-def _adb(target: str, cmd: str, timeout: int = 10) -> Tuple[bool, str]:
-    try:
-        r = subprocess.run(
-            f"adb -s {target} {cmd}",
-            shell=True, capture_output=True, text=True, timeout=timeout,
-        )
-        return r.returncode == 0, r.stdout.strip()
-    except Exception as e:
-        return False, str(e)
 
 
 def _shell(target: str, cmd: str) -> bool:
@@ -72,8 +59,8 @@ class TouchSimulator:
                 m = re.search(r'(\d+)x(\d+)', out)
                 if m:
                     return int(m.group(1)), int(m.group(2))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Screen resolution detection failed: {e}")
         return 1080, 2400  # fallback
 
     def _get_sensor_sim(self):

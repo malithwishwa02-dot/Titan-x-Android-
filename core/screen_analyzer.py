@@ -28,6 +28,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from adb_utils import adb as _adb_cmd, adb_raw as _adb_raw
+
 logger = logging.getLogger("titan.screen-analyzer")
 
 try:
@@ -110,30 +112,6 @@ class ScreenState:
         return "\n".join(lines)
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# ADB HELPERS
-# ═══════════════════════════════════════════════════════════════════════
-
-def _adb_cmd(target: str, cmd: str, timeout: int = 15) -> Tuple[bool, str]:
-    try:
-        r = subprocess.run(
-            f"adb -s {target} {cmd}",
-            shell=True, capture_output=True, text=True, timeout=timeout,
-        )
-        return r.returncode == 0, r.stdout.strip()
-    except Exception as e:
-        return False, str(e)
-
-
-def _adb_raw(target: str, cmd: str, timeout: int = 15) -> Tuple[bool, bytes]:
-    try:
-        r = subprocess.run(
-            f"adb -s {target} {cmd}",
-            shell=True, capture_output=True, timeout=timeout,
-        )
-        return r.returncode == 0, r.stdout
-    except Exception as e:
-        return False, b""
 
 
 # ═══════════════════════════════════════════════════════════════════════

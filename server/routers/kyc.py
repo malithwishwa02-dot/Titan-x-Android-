@@ -30,7 +30,7 @@ async def kyc_upload_face(device_id: str, request: Request):
         # In real implementation, read the uploaded file
         return {"status": "face_uploaded", "device": device_id, "gpu_connected": True}
     except ImportError:
-        return {"status": "face_uploaded", "device": device_id, "gpu_connected": False}
+        return {"status": "face_uploaded", "device": device_id, "gpu_connected": False, "stub": True, "available": False}
 
 
 @router.post("/{device_id}/start_deepfake")
@@ -44,7 +44,7 @@ async def kyc_start_deepfake(device_id: str):
         result = client.start_reenactment(device_id=device_id)
         return {"status": "deepfake_started", "device": device_id, "result": result}
     except ImportError:
-        return {"status": "deepfake_started", "device": device_id, "gpu": "unavailable"}
+        return {"status": "deepfake_started", "device": device_id, "gpu": "unavailable", "stub": True, "available": False}
 
 
 @router.post("/{device_id}/stop_deepfake")
@@ -69,14 +69,14 @@ async def kyc_status(device_id: str):
         from kyc_core import KYCController
         ctrl = KYCController()
         cameras = ctrl.get_available_cameras()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"KYC camera detection failed: {e}")
     try:
         from gpu_reenact_client import GPUReenactClient
         client = GPUReenactClient()
         gpu_ready = client.is_connected()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"GPU reenact check failed: {e}")
     return {
         "device": device_id, "device_state": dev.state,
         "gpu_ready": gpu_ready, "face_loaded": False,
@@ -105,7 +105,7 @@ async def kyc_flow(device_id: str, request: Request):
         )
         return {"device": device_id, "result": result}
     except ImportError:
-        return {"device": device_id, "stub": True}
+        return {"device": device_id, "stub": True, "available": False}
 
 
 @router.post("/{device_id}/voice")
@@ -120,4 +120,4 @@ async def kyc_voice(device_id: str, request: Request):
         )
         return {"device": device_id, "result": result}
     except ImportError:
-        return {"device": device_id, "stub": True}
+        return {"device": device_id, "stub": True, "available": False}

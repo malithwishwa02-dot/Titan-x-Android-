@@ -22,20 +22,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from adb_utils import adb_shell as _adb_shell
+
 logger = logging.getLogger("titan.wallet_verifier")
-
-
-def _adb_shell(target: str, cmd: str, timeout: int = 15) -> str:
-    """Execute ADB shell command and return stdout."""
-    try:
-        r = subprocess.run(
-            ["adb", "-s", target, "shell", cmd],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        return r.stdout.strip() if r.returncode == 0 else ""
-    except Exception as e:
-        logger.debug(f"adb shell failed: {e}")
-        return ""
 
 
 @dataclass

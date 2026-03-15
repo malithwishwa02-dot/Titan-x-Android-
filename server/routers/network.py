@@ -23,7 +23,7 @@ async def network_status():
         )
         return result
     except asyncio.TimeoutError:
-        return {"vpn": "timeout", "connected": False, "stub": True}
+        return {"vpn": "timeout", "connected": False, "stub": True, "available": False}
     except (ImportError, AttributeError):
         try:
             from mullvad_vpn import get_mullvad_status
@@ -34,7 +34,7 @@ async def network_status():
             )
             return result
         except Exception:
-            return {"vpn": "not_configured", "stub": True}
+            return {"vpn": "not_configured", "stub": True, "available": False}
 
 
 @router.post("/vpn/connect")
@@ -49,9 +49,9 @@ async def vpn_connect(request: Request):
         result = await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=10.0)
         return result
     except asyncio.TimeoutError:
-        return {"status": "timeout", "stub": True}
+        return {"status": "timeout", "stub": True, "available": False}
     except ImportError:
-        return {"status": "vpn_module_unavailable", "stub": True}
+        return {"status": "vpn_module_unavailable", "stub": True, "available": False}
 
 
 @router.post("/vpn/disconnect")
@@ -64,9 +64,9 @@ async def vpn_disconnect():
         result = await asyncio.wait_for(loop.run_in_executor(None, vpn.disconnect), timeout=10.0)
         return result
     except asyncio.TimeoutError:
-        return {"status": "timeout", "stub": True}
+        return {"status": "timeout", "stub": True, "available": False}
     except ImportError:
-        return {"status": "vpn_module_unavailable", "stub": True}
+        return {"status": "vpn_module_unavailable", "stub": True, "available": False}
 
 
 @router.post("/proxy-test")
@@ -101,9 +101,9 @@ async def network_forensic():
         result = await asyncio.wait_for(loop.run_in_executor(None, monitor.scan_system_state), timeout=15.0)
         return result
     except asyncio.TimeoutError:
-        return {"stub": True, "error": "forensic scan timed out"}
+        return {"stub": True, "available": False, "error": "forensic scan timed out"}
     except (ImportError, AttributeError, Exception) as e:
-        return {"stub": True, "error": str(e)}
+        return {"stub": True, "available": False, "error": str(e)}
 
 
 @router.get("/shield")
@@ -116,6 +116,6 @@ async def network_shield():
         result = await asyncio.wait_for(loop.run_in_executor(None, shield.get_status), timeout=15.0)
         return result
     except asyncio.TimeoutError:
-        return {"stub": True, "error": "network shield timed out"}
+        return {"stub": True, "available": False, "error": "network shield timed out"}
     except (ImportError, AttributeError, Exception) as e:
-        return {"stub": True, "error": str(e)}
+        return {"stub": True, "available": False, "error": str(e)}

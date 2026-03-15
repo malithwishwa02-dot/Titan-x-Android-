@@ -20,7 +20,7 @@ async def intel_copilot(request: Request):
         result = engine.orchestrate_operation_intel(query)
         return {"result": result}
     except (ImportError, AttributeError):
-        return {"result": f"AI engine not available. Query: {query}", "stub": True}
+        return {"result": f"AI engine not available. Query: {query}", "stub": True, "available": False}
 
 
 @router.post("/recon")
@@ -32,7 +32,7 @@ async def intel_recon(request: Request):
         result = get_target_intel(domain)
         return {"result": result}
     except (ImportError, Exception) as e:
-        return {"domain": domain, "stub": True, "error": str(e)}
+        return {"domain": domain, "stub": True, "available": False, "error": str(e)}
 
 
 @router.post("/osint")
@@ -51,7 +51,7 @@ async def intel_osint(request: Request):
         )
         return {"result": result}
     except (ImportError, Exception) as e:
-        return {"stub": True, "message": str(e)}
+        return {"stub": True, "available": False, "message": str(e)}
 
 
 @router.post("/3ds-strategy")
@@ -67,7 +67,7 @@ async def intel_3ds_strategy(request: Request):
         )
         return {"result": result}
     except (ImportError, Exception) as e:
-        return {"stub": True, "error": str(e)}
+        return {"stub": True, "available": False, "error": str(e)}
 
 
 @router.post("/darkweb")
@@ -80,4 +80,4 @@ async def intel_darkweb(request: Request):
         result = engine.search(query)
         return {"result": result}
     except ImportError:
-        return {"query": query, "stub": True}
+        return {"query": query, "stub": True, "available": False}

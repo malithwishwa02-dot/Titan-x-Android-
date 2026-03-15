@@ -60,17 +60,21 @@ if CONSOLE_DIR.exists():
 # Device manager singleton
 dm = DeviceManager()
 
+# Register DM with FastAPI Depends system
+from deps import set_device_manager
+set_device_manager(dm)
+
 # ─── Register Routers ─────────────────────────────────────────────────
-from routers import devices, stealth, genesis, agent, intel, network
+from routers import devices, stealth, genesis, provision, agent, intel, network
 from routers import cerberus, targets, kyc, admin, dashboard, settings
 from routers import bundles, ai, ws, training
 
-# Initialize routers that need the device manager
-for mod in [devices, stealth, genesis, agent, kyc, admin, dashboard, bundles, ws, ai, training]:
+# Initialize routers that need the device manager (legacy pattern, kept for compat)
+for mod in [devices, stealth, genesis, provision, agent, kyc, admin, dashboard, bundles, ws, ai, training]:
     mod.init(dm)
 
 # Include all routers
-for r in [devices, stealth, genesis, agent, intel, network, cerberus,
+for r in [devices, stealth, genesis, provision, agent, intel, network, cerberus,
           targets, kyc, admin, dashboard, settings, bundles, ai, ws, training]:
     app.include_router(r.router)
 
@@ -122,6 +126,78 @@ async def health_check():
     if not all(c.get("ok") for c in health["checks"].values()):
         health["status"] = "degraded"
     return health
+
+
+@app.get("/api/capabilities")
+async def capabilities():
+    """Report which optional modules are actually available vs stub."""
+    caps = {}
+    # Network modules
+    for name, imp in [
+        ("mullvad_vpn", "mullvad_vpn"),
+        ("forensic_monitor", "forensic_monitor"),
+        ("network_shield", "network_shield"),
+        ("proxy_scorer", "proxy_quality_scorer"),
+    ]:
+        try:
+            __import__(imp)
+            caps[name] = True
+        except ImportError:
+            caps[name] = False
+    # Intel modules
+    for name, imp in [
+        ("ai_intelligence", "ai_intelligence"),
+        ("target_intelligence", "target_intelligence"),
+        ("osint_orchestrator", "osint_orchestrator"),
+        ("three_ds_strategy", "three_ds_strategy"),
+        ("onion_search", "onion_search"),
+    ]:
+        try:
+            __import__(imp)
+            caps[name] = True
+        except ImportError:
+            caps[name] = False
+    # Cerberus modules
+    for name, imp in [
+        ("cerberus_engine", "cerberus_core"),
+        ("bin_database", "bin_database"),
+        ("bin_scanner", "bin_scanner"),
+    ]:
+        try:
+            __import__(imp)
+            caps[name] = True
+        except ImportError:
+            caps[name] = False
+    # Targets modules
+    for name, imp in [
+        ("web_check", "web_check_engine"),
+        ("waf_detector", "waf_detector"),
+        ("dns_intel", "dns_intel"),
+        ("target_profiler", "target_profiler"),
+    ]:
+        try:
+            __import__(imp)
+            caps[name] = True
+        except ImportError:
+            caps[name] = False
+    # KYC modules
+    for name, imp in [
+        ("gpu_reenact", "gpu_reenact_client"),
+        ("kyc_controller", "kyc_core"),
+        ("kyc_voice", "kyc_voice"),
+    ]:
+        try:
+            __import__(imp)
+            caps[name] = True
+        except ImportError:
+            caps[name] = False
+    available = sum(1 for v in caps.values() if v)
+    return {
+        "total": len(caps),
+        "available": available,
+        "stub": len(caps) - available,
+        "modules": caps,
+    }
 
 
 @app.get("/", response_class=HTMLResponse)

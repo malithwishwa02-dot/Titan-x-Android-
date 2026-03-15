@@ -139,8 +139,8 @@ async def device_input(device_id: str, body: InputBody):
         try:
             parts = info["stdout"].split(":")[-1].strip().split("x")
             width, height = int(parts[0]), int(parts[1])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Screen resolution parse failed: {e}")
 
     if body.type == "tap":
         px, py = int(body.x * width), int(body.y * height)

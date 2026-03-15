@@ -51,7 +51,7 @@ async def cerberus_validate(request: Request):
         except Exception as e:
             logger.exception("Cerberus validate error")
             return {"error": str(e), "status": "error"}
-    return {"result": "cerberus_engine_unavailable", "stub": True}
+    return {"result": "cerberus_engine_unavailable", "stub": True, "available": False}
 
 
 @router.post("/batch")
@@ -60,7 +60,7 @@ async def cerberus_batch(request: Request):
     cards = body.get("cards", [])
     engine = _get_engine()
     if not engine:
-        return {"results": [], "stub": True}
+        return {"results": [], "stub": True, "available": False}
     results = []
     for card_str in cards:
         try:
@@ -86,7 +86,7 @@ async def cerberus_bin_lookup(request: Request):
         result = db.lookup(bin_prefix)
         return {"bin": bin_prefix, "result": result}
     except ImportError:
-        return {"bin": bin_prefix, "stub": True}
+        return {"bin": bin_prefix, "stub": True, "available": False}
 
 
 @router.post("/intelligence")
@@ -99,4 +99,4 @@ async def cerberus_intelligence(request: Request):
         result = scanner.scan(bin_prefix)
         return {"bin": bin_prefix, "result": result}
     except ImportError:
-        return {"bin": bin_prefix, "stub": True}
+        return {"bin": bin_prefix, "stub": True, "available": False}

@@ -50,39 +50,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from adb_utils import adb as _adb, adb_shell as _adb_shell, adb_push as _adb_push, ensure_adb_root as _ensure_adb_root
+
 logger = logging.getLogger("titan.wallet-provisioner")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# ADB HELPERS
-# ═══════════════════════════════════════════════════════════════════════
-
-def _adb(target: str, cmd: str, timeout: int = 15) -> Tuple[bool, str]:
-    try:
-        r = subprocess.run(
-            f"adb -s {target} {cmd}",
-            shell=True, capture_output=True, text=True, timeout=timeout,
-        )
-        return r.returncode == 0, r.stdout.strip()
-    except Exception as e:
-        return False, str(e)
-
-
-def _adb_push(target: str, local: str, remote: str) -> bool:
-    ok, _ = _adb(target, f"push {local} '{remote}'", timeout=30)
-    return ok
-
-
-def _adb_shell(target: str, cmd: str) -> str:
-    ok, out = _adb(target, f'shell "{cmd}"')
-    return out if ok else ""
-
-
-def _ensure_adb_root(target: str):
-    ok, out = _adb(target, "root", timeout=10)
-    if ok or "already running as root" in out.lower():
-        import time; time.sleep(1)
-    return True
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -127,8 +97,10 @@ def detect_issuer(card_number: str) -> str:
         rec = BINDatabase.get().lookup(bin6)
         if rec:
             return rec.bank
-    except Exception:
+    except ImportError:
         pass
+    except Exception as e:
+        logger.debug(f"BIN issuer lookup failed for {bin6}: {e}")
     return ISSUER_MAP.get(num[:4], "Bank")
 
 
@@ -141,8 +113,10 @@ def detect_bin_info(card_number: str) -> Dict[str, Any]:
         rec = BINDatabase.get().lookup(bin6)
         if rec:
             return rec.to_dict()
-    except Exception:
+    except ImportError:
         pass
+    except Exception as e:
+        logger.debug(f"BIN info lookup failed for {bin6}: {e}")
     return {"bin": bin6, "bank": ISSUER_MAP.get(num[:4], "Bank"), "otp_risk": "medium"}
 
 

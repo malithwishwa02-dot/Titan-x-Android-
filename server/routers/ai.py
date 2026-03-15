@@ -69,8 +69,8 @@ async def ai_status():
             if resp.status_code == 200:
                 ollama_ok = True
                 models = [m["name"] for m in resp.json().get("models", [])]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Ollama status check failed: {e}")
 
     faceswap_ok = False
     try:

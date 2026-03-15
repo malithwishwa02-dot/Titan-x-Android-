@@ -107,8 +107,8 @@ def _adb(target: str, cmd: str, timeout: int = 15) -> Dict[str, Any]:
 
 
 def _adb_shell(target: str, cmd: str, timeout: int = 15) -> str:
-    r = _adb(target, f'shell "{cmd}"', timeout=timeout)
-    return r.get("stdout", "")
+    from adb_utils import adb_shell
+    return adb_shell(target, cmd, timeout=timeout)
 
 
 # ═══════════════════════════════════════════════════════════════════════
