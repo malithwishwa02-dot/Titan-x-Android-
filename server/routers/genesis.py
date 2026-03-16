@@ -81,11 +81,36 @@ async def genesis_create(body: GenesisCreateBody):
     try:
         # Build persona address from user inputs
         persona_address = None
-        if body.cc_cardholder:  # If cardholder provided, user gave full identity
-            pass
-        # Build address dict if street provided
-        if hasattr(body, 'street') and body.cc_cardholder:  # use fields from SmartForge path
-            pass
+        
+        # Extract address fields if provided via extended body attributes
+        street = getattr(body, 'street', '') or ''
+        city = getattr(body, 'city', '') or ''
+        state = getattr(body, 'state', '') or ''
+        zip_code = getattr(body, 'zip', '') or ''
+        
+        # Build address dict if any address field provided
+        if street or city or state or zip_code:
+            persona_address = {
+                "address": street,
+                "city": city,
+                "state": state,
+                "zip": zip_code,
+                "country": body.country,
+            }
+        
+        # If cardholder provided but no address, try to derive from location
+        if body.cc_cardholder and not persona_address:
+            # Use location preset to derive approximate address
+            from device_presets import get_location_config
+            loc_config = get_location_config(body.location)
+            if loc_config:
+                persona_address = {
+                    "address": "",  # Will be generated
+                    "city": loc_config.get("city", ""),
+                    "state": loc_config.get("state", ""),
+                    "zip": loc_config.get("zip", ""),
+                    "country": body.country,
+                }
 
         profile = _forge.forge(
             persona_name=body.name, persona_email=body.email, persona_phone=body.phone,

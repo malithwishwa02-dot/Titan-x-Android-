@@ -44,9 +44,18 @@ class FaceSwapBody(BaseModel):
     target_b64: str  # base64 target image/frame
 
 
+def cleanup_agent(device_id: str):
+    """Remove agent for a deleted device."""
+    _agents.pop(device_id, None)
+
+
 def _get_agent(device_id: str, adb_target: str):
     """Get or create a DeviceAgent for ADB-based screen interaction."""
     if device_id not in _agents:
+        # LRU cap: evict oldest if too many agents
+        if len(_agents) >= 20:
+            oldest = next(iter(_agents))
+            _agents.pop(oldest, None)
         try:
             from device_agent import DeviceAgent
             _agents[device_id] = DeviceAgent(adb_target=adb_target)
@@ -59,7 +68,7 @@ def _get_agent(device_id: str, adb_target: str):
 @router.get("/status")
 async def ai_status():
     """AI system status — Ollama models, vision, faceswap."""
-    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    ollama_url = os.environ.get("TITAN_GPU_OLLAMA") or os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11435")
     ollama_ok = False
     models = []
     try:
@@ -92,8 +101,8 @@ async def ai_query(request: Request):
     """Generic AI text query via Ollama."""
     body = await request.json()
     prompt = body.get("prompt", "")
-    model = body.get("model", "minicpm-v:8b")
-    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    model = body.get("model", os.environ.get("TITAN_AGENT_MODEL", "titan-agent:7b"))
+    ollama_url = os.environ.get("TITAN_GPU_OLLAMA") or os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11435")
     try:
         import httpx
         async with httpx.AsyncClient(timeout=60.0) as client:

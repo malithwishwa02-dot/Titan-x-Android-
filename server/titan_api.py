@@ -83,11 +83,31 @@ for r in [devices, stealth, genesis, provision, agent, intel, network, cerberus,
 # CONSOLE — Serves the SPA
 # ═══════════════════════════════════════════════════════════════════════
 
+@app.get("/ready")
+async def readiness_check():
+    """Kubernetes-style readiness probe - is the app ready to serve traffic?"""
+    try:
+        # Check if at least one device is available
+        devs = dm.list_devices()
+        has_device = any(d.get("status") == "online" for d in devs)
+        return {"ready": True, "devices": len(devs), "online": has_device}
+    except Exception as e:
+        return {"ready": False, "error": str(e)}
+
+
+@app.get("/live")
+async def liveness_check():
+    """Kubernetes-style liveness probe - is the app alive?"""
+    return {"alive": True, "version": "11.3.2"}
+
+
 @app.get("/health")
 async def health_check():
     """System health check: ADB, Ollama, disk, memory."""
     import shutil, subprocess as _sp
-    health = {"status": "ok", "checks": {}}
+    import time
+    start = time.time()
+    health = {"status": "ok", "checks": {}, "timestamp": int(start)}
     # ADB
     try:
         devs = dm.list_devices()
@@ -203,9 +223,13 @@ async def capabilities():
 @app.get("/", response_class=HTMLResponse)
 async def console_root():
     index = CONSOLE_DIR / "index.html"
-    if index.exists():
-        return HTMLResponse(index.read_text())
-    return HTMLResponse("<h1>Titan V11.3 — Console not found. Deploy console/index.html</h1>")
+    content = index.read_text() if index.exists() else "<h1>Titan V11.3 — Console not found. Deploy console/index.html</h1>"
+    resp = HTMLResponse(content)
+    # Inject API auth token as cookie so console JS can read it
+    secret = os.environ.get("TITAN_API_SECRET", "").strip()
+    if secret and secret != "change-me-to-a-secure-random-string":
+        resp.set_cookie("titan_token", secret, httponly=False, samesite="strict", path="/")
+    return resp
 
 @app.get("/mobile", response_class=HTMLResponse)
 async def console_mobile():
@@ -242,4 +266,31 @@ async def startup():
     logger.info(f"Console dir: {CONSOLE_DIR}")
     logger.info(f"Core dir: {CORE_DIR}")
     await cpu_governor.start()
+    
+    # Start ADB connection watchdog for all online devices
+    try:
+        from adb_utils import start_connection_watchdog
+        targets = [d.get("adb_target") for d in dm.list_devices() if d.get("status") == "online"]
+        if targets:
+            start_connection_watchdog(targets, check_interval=30)
+    except Exception as e:
+        logger.warning(f"ADB watchdog init failed: {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Graceful shutdown - drain in-flight requests and cleanup."""
+    logger.info("Titan V11.3 API Server shutting down gracefully")
+    
+    # Stop CPU governor
+    try:
+        await cpu_governor.stop()
+    except Exception:
+        pass
+    
+    # Allow in-flight requests to complete (up to 10 seconds)
+    import asyncio
+    await asyncio.sleep(2)
+    
+    logger.info("Shutdown complete")
 

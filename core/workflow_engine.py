@@ -242,7 +242,9 @@ class WorkflowEngine:
             "lockdown_device": lambda: self._stage_lockdown(job),
         }
 
-        for stage in job.stages:
+        ABORT_ON_FAILURE = {"bootstrap_gapps", "forge_profile"}
+
+        for idx, stage in enumerate(job.stages):
             stage.status = "running"
             stage.started_at = time.time()
 
@@ -255,7 +257,13 @@ class WorkflowEngine:
                 stage.status = "failed"
                 stage.error = str(e)
                 logger.warning(f"Stage {stage.name} failed: {e}")
-                # Continue to next stage even on failure
+                # Abort remaining stages if a critical stage fails
+                if stage.name in ABORT_ON_FAILURE:
+                    stage.completed_at = time.time()
+                    for remaining in job.stages[idx + 1:]:
+                        remaining.status = "skipped"
+                        remaining.error = f"Skipped: critical stage '{stage.name}' failed"
+                    raise RuntimeError(f"Aborting workflow: critical stage '{stage.name}' failed: {e}")
 
             stage.completed_at = time.time()
 
@@ -290,25 +298,27 @@ class WorkflowEngine:
 
     async def _stage_forge(self, job: WorkflowJob, persona: Dict,
                            country: str, aging: Dict):
-        """Stage: Forge Genesis profile."""
-        import urllib.request
-        api = f"http://127.0.0.1:{os.environ.get('TITAN_API_PORT', '8080')}"
-        body = json.dumps({
-            "name": persona.get("name", ""),
-            "email": persona.get("email", ""),
-            "phone": persona.get("phone", ""),
-            "country": country,
-            "age_days": aging["age_days"],
-        }).encode()
-        req = urllib.request.Request(
-            f"{api}/api/genesis/create",
-            data=body, headers={"Content-Type": "application/json"},
-            method="POST",
+        """Stage: Forge Genesis profile (direct call, no HTTP back-loop)."""
+        from android_profile_forge import AndroidProfileForge
+
+        forge = AndroidProfileForge()
+        profile = forge.forge(
+            persona_name=persona.get("name", ""),
+            persona_email=persona.get("email", ""),
+            persona_phone=persona.get("phone", ""),
+            country=country,
+            age_days=aging["age_days"],
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
-            job.config["profile_id"] = data.get("profile_id", "")
-            logger.info(f"Profile forged: {job.config['profile_id']}")
+
+        # Persist profile to disk (same path as genesis router)
+        profiles_dir = Path(os.environ.get("TITAN_DATA", "/opt/titan/data")) / "profiles"
+        profiles_dir.mkdir(parents=True, exist_ok=True)
+        profile_id = profile.get("id", f"TITAN-{uuid.uuid4().hex[:8].upper()}")
+        profile["id"] = profile_id
+        (profiles_dir / f"{profile_id}.json").write_text(json.dumps(profile, indent=2))
+
+        job.config["profile_id"] = profile_id
+        logger.info(f"Profile forged: {profile_id}")
 
     async def _stage_inject(self, job: WorkflowJob, persona: Dict,
                             card_data: Dict):

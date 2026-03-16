@@ -3,6 +3,7 @@ Titan V11.3 — Devices Router (Cuttlefish)
 /api/devices/* — Device CRUD, streaming, screenshots, input
 """
 
+import asyncio
 import io
 from typing import List
 
@@ -87,8 +88,10 @@ async def create_device(body: CreateDeviceBody):
             defaults = COUNTRY_DEFAULTS.get(body.country, {})
             location = defaults.get("location", "nyc")
 
-        patcher = AnomalyPatcher(adb_target=dev.adb_target)
-        patch_result = patcher.full_patch(body.model, body.carrier, location)
+        def _run_patch():
+            patcher = AnomalyPatcher(adb_target=dev.adb_target)
+            return patcher.full_patch(body.model, body.carrier, location)
+        patch_result = await asyncio.to_thread(_run_patch)
         dev.patch_result = patch_result.to_dict()
         dev.stealth_score = patch_result.score
         dev.state = "patched"
@@ -103,6 +106,17 @@ async def destroy_device(device_id: str):
     ok = await dm.destroy_device(device_id)
     if not ok:
         raise HTTPException(404, "Device not found")
+    # B4: Clean up stale agents for this device
+    try:
+        from routers.agent import cleanup_agent as _agent_cleanup
+        _agent_cleanup(device_id)
+    except Exception:
+        pass
+    try:
+        from routers.ai import cleanup_agent as _ai_cleanup
+        _ai_cleanup(device_id)
+    except Exception:
+        pass
     return {"ok": True}
 
 

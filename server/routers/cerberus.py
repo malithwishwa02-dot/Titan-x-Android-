@@ -69,7 +69,7 @@ async def cerberus_batch(request: Request):
             if len(parts) >= 2: card_body["exp_month"] = parts[1]
             if len(parts) >= 3: card_body["exp_year"] = parts[2]
             if len(parts) >= 4: card_body["cvv"] = parts[3]
-            r = engine.validate(card_str)
+            r = engine.validate(card_body)
             results.append(r)
         except Exception as e:
             results.append({"card": card_str[:10] + "...", "error": str(e)})

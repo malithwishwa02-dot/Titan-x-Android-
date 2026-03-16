@@ -291,14 +291,13 @@ async def genesis_age_device(device_id: str, body: AgeDeviceBody):
             adb_target = dev.adb_target
 
         patcher = AnomalyPatcher(adb_target=adb_target)
-        loop = asyncio.get_event_loop()
         fn = functools.partial(
             patcher.full_patch,
             preset_name=body.preset,
             carrier_name=body.carrier,
             location_name=body.location,
         )
-        report = await asyncio.wait_for(loop.run_in_executor(None, fn), timeout=120.0)
+        report = await asyncio.wait_for(asyncio.to_thread(fn), timeout=120.0)
         return {"status": "complete", "device_id": device_id, "phases": len(report.results), "report": report.__dict__}
     except asyncio.TimeoutError:
         return {"status": "timeout", "device_id": device_id}

@@ -1,6 +1,6 @@
 {
   "name": "titan-console",
-  "version": "11.3.2",
+  "version": "11.3.3",
   "description": "Titan V11.3 Cuttlefish Android Console — Desktop App",
   "main": "main.js",
   "scripts": {
@@ -79,7 +79,6 @@
     "files": [
       "main.js",
       "preload.js",
-      "setup.js",
       "setup.html",
       "assets/**",
       "package.json"

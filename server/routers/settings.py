@@ -26,8 +26,25 @@ async def get_settings():
     return {"gpu_url": os.environ.get("TITAN_GPU_URL", ""), "stub": True}
 
 
+ALLOWED_SETTINGS_KEYS = {
+    "gpu_url", "titan_api_secret", "titan_data", "ollama_url",
+    "vastai_host", "vastai_port", "theme", "auto_patch", "max_devices",
+    "agent_model", "vision_model", "specialist_model",
+}
+
+
 @router.post("")
 async def save_settings(request: Request):
     body = await request.json()
-    (_config_dir() / "settings.json").write_text(json.dumps(body, indent=2))
-    return {"ok": True}
+    filtered = {k: v for k, v in body.items() if k in ALLOWED_SETTINGS_KEYS}
+    # Merge with existing settings so partial updates work
+    settings_file = _config_dir() / "settings.json"
+    existing = {}
+    if settings_file.exists():
+        try:
+            existing = json.loads(settings_file.read_text())
+        except Exception:
+            pass
+    existing.update(filtered)
+    settings_file.write_text(json.dumps(existing, indent=2))
+    return {"ok": True, "saved_keys": list(filtered.keys())}

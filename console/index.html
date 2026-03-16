@@ -919,8 +919,21 @@ function titanConsole() {
       setInterval(()=>this.loadDevices(),10000);
     },
 
+    _apiToken: null,
+    _getApiToken() {
+      if (this._apiToken) return this._apiToken;
+      // Try cookie first (set by FastAPI root endpoint)
+      const m = document.cookie.match(/(?:^|;\s*)titan_token=([^;]*)/);
+      if (m && m[1]) { this._apiToken = m[1]; return this._apiToken; }
+      // Try titanDesktop bridge (Electron preload)
+      if (window.titanDesktop && window.titanDesktop.apiToken) { this._apiToken = window.titanDesktop.apiToken; return this._apiToken; }
+      return null;
+    },
     async api(path, opts={}) {
-      const r = await fetch('/api'+path, {headers:{'Content-Type':'application/json'}, ...opts});
+      const hdrs = {'Content-Type':'application/json', ...(opts.headers||{})};
+      const token = this._getApiToken();
+      if (token) hdrs['Authorization'] = 'Bearer ' + token;
+      const r = await fetch('/api'+path, {...opts, headers: hdrs});
       if(!r.ok) throw new Error(await r.text());
       return r.json();
     },

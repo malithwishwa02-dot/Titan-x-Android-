@@ -32,7 +32,7 @@ async def ws_screen(websocket: WebSocket, device_id: str):
     try:
         # ADB screencap path (~4 FPS)
         while True:
-            data = await dm.screenshot(device_id)
+            data = await asyncio.to_thread(dm.screenshot, device_id)
             if data:
                 await websocket.send_bytes(data)
             await asyncio.sleep(0.25)
@@ -51,6 +51,7 @@ async def ws_logs(websocket: WebSocket, device_id: str):
         await websocket.close(1008, "Device not found")
         return
 
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "adb", "-s", dev.adb_target, "logcat", "-v", "time",
@@ -66,7 +67,8 @@ async def ws_logs(websocket: WebSocket, device_id: str):
     except Exception as e:
         logger.warning(f"WS logs error: {e}")
     finally:
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        if proc:
+            try:
+                proc.kill()
+            except Exception:
+                pass

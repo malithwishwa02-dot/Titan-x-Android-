@@ -239,7 +239,7 @@ def train_action_model(data_dir: str, output_dir: str,
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        model = prepare_model_for_kbit_training(model)
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
         lora_config = LoraConfig(
             r=rank,
             lora_alpha=alpha,
@@ -251,7 +251,7 @@ def train_action_model(data_dir: str, output_dir: str,
         )
         model = get_peft_model(model, lora_config)
         model.print_trainable_parameters()
-        logger.info("Standard PEFT model loaded")
+        logger.info("Standard PEFT model loaded with gradient checkpointing")
 
     # Format dataset for SFTTrainer
     def _format_chat(example):
@@ -555,16 +555,17 @@ def train_specialist_model(data_dir: str, output_dir: str,
         logger.info(f"Loading {base_model} via standard PEFT (4-bit)...")
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True, bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16, bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True,
         )
         model = AutoModelForCausalLM.from_pretrained(
             base_model, quantization_config=bnb_config,
-            device_map="auto", trust_remote_code=True,
+            device_map={"": 0}, trust_remote_code=True,
+            low_cpu_mem_usage=True,
         )
         tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        model = prepare_model_for_kbit_training(model)
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
         lora_config = LoraConfig(
             r=rank, lora_alpha=alpha,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
@@ -573,6 +574,7 @@ def train_specialist_model(data_dir: str, output_dir: str,
         )
         model = get_peft_model(model, lora_config)
         model.print_trainable_parameters()
+        logger.info("Standard PEFT model loaded with gradient checkpointing")
 
     def _format_chat(example):
         text = tokenizer.apply_chat_template(

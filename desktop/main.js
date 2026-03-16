@@ -22,6 +22,8 @@ let mainWindow = null;
 let setupWindow = null;
 let tray = null;
 let serverProc = null;
+let _serverRestarts = 0;
+const MAX_SERVER_RESTARTS = 3;
 
 // ─── Prevent duplicate instances ─────────────────────────────────────
 const gotLock = app.requestSingleInstanceLock();
@@ -39,6 +41,30 @@ if (!gotLock) {
 
 // ─── Utilities ───────────────────────────────────────────────────────
 function ensureDir(d) { fs.mkdirSync(d, { recursive: true }); }
+
+function loadDotEnv(envPath) {
+  const vars = {};
+  try {
+    if (!fs.existsSync(envPath)) return vars;
+    const lines = fs.readFileSync(envPath, 'utf-8').split('\n');
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq < 1) continue;
+      const key = line.slice(0, eq).trim();
+      let val = line.slice(eq + 1).trim();
+      // Strip surrounding quotes
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (key && val) vars[key] = val;
+    }
+  } catch (e) {
+    console.warn('[dotenv] Failed to load', envPath, e.message);
+  }
+  return vars;
+}
 
 function findPython() {
   for (const cmd of ['python3', 'python']) {
@@ -94,13 +120,19 @@ function startServer() {
     });
     probe.on('error', () => {
       // Nothing listening — start it ourselves
+      const dotEnvVars = loadDotEnv(path.join(USER_DATA, '.env'));
+      // Also try project-level .env.example fallback
+      const projEnv = loadDotEnv(path.join(RESOURCES, '.env.example'));
       const env = {
         ...process.env,
+        ...projEnv,
+        ...dotEnvVars,
         PYTHONPATH: [SERVER_DIR, CORE_DIR, '/opt/titan/core'].join(':'),
         TITAN_DATA,
-        CVD_BIN_DIR: process.env.CVD_BIN_DIR || '/opt/titan/cuttlefish/cf/bin',
-        CVD_HOME_BASE: process.env.CVD_HOME_BASE || '/opt/titan/cuttlefish',
-        CVD_IMAGES_DIR: process.env.CVD_IMAGES_DIR || '/opt/titan/cuttlefish/images',
+        TITAN_API_PORT: String(API_PORT),
+        CVD_BIN_DIR: dotEnvVars.CVD_BIN_DIR || process.env.CVD_BIN_DIR || '/opt/titan/cuttlefish/cf/bin',
+        CVD_HOME_BASE: dotEnvVars.CVD_HOME_BASE || process.env.CVD_HOME_BASE || '/opt/titan/cuttlefish',
+        CVD_IMAGES_DIR: dotEnvVars.CVD_IMAGES_DIR || process.env.CVD_IMAGES_DIR || '/opt/titan/cuttlefish/images',
       };
 
       serverProc = spawn(
@@ -117,8 +149,19 @@ function startServer() {
       serverProc.stderr.on('data', (d) => console.error('[server]', d.toString().trim()));
       serverProc.on('exit', (code) => {
         if (code !== 0 && code !== null) {
-          dialog.showErrorBox('Titan Server Error',
-            `The backend server exited unexpectedly (code ${code}).\nCheck the terminal for details.`);
+          if (_serverRestarts < MAX_SERVER_RESTARTS) {
+            _serverRestarts++;
+            const delay = Math.pow(2, _serverRestarts) * 1000;
+            console.error(`[server] Crashed (code ${code}), restarting in ${delay}ms (attempt ${_serverRestarts}/${MAX_SERVER_RESTARTS})`);
+            setTimeout(() => {
+              startServer().then(() => {
+                if (mainWindow && !mainWindow.isDestroyed()) mainWindow.reload();
+              });
+            }, delay);
+          } else {
+            dialog.showErrorBox('Titan Server Error',
+              `The backend server crashed ${MAX_SERVER_RESTARTS} times (last code ${code}).\nCheck the terminal for details.`);
+          }
         }
       });
       resolve(false);
@@ -151,7 +194,8 @@ function showSetupWindow() {
 // ─── IPC Handlers ────────────────────────────────────────────────────
 ipcMain.handle('setup:getInfo', () => {
   const python = findPython();
-  const kvmExists = fs.existsSync('/dev/kvm');
+  let kvmExists = false;
+  try { fs.accessSync('/dev/kvm', fs.constants.R_OK | fs.constants.W_OK); kvmExists = true; } catch (_) {}
   let adbFound = false;
   try { execSync('which adb', { timeout: 3000 }); adbFound = true; } catch (_) {}
   return {

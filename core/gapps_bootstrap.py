@@ -181,6 +181,36 @@ class GAppsBootstrap:
                               len(list(self.gapps_dir.glob("*.xapk")))) if self.gapps_dir.exists() else 0,
         }
 
+    def auto_download_apks(self) -> List[str]:
+        """Download missing essential APKs from APKPure CDN. Best-effort."""
+        import urllib.request
+        self.gapps_dir.mkdir(parents=True, exist_ok=True)
+        downloaded = []
+        for entry in ESSENTIAL_APKS:
+            if not entry["required"]:
+                continue
+            if self._find_apk(entry):
+                continue
+            pkg = entry["pkg"]
+            for fmt, ext in [("XAPK", ".xapk"), ("APK", ".apk")]:
+                url = f"https://d.apkpure.net/b/{fmt}/{pkg}?version=latest"
+                dest = self.gapps_dir / f"{pkg}{ext}"
+                try:
+                    logger.info(f"  Downloading {entry['name']} ({fmt}) from APKPure...")
+                    req = urllib.request.Request(url, headers={
+                        "User-Agent": "Mozilla/5.0 (Linux; Android 15) Titan/11.3"
+                    })
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        data = resp.read()
+                        if len(data) > 50000:  # sanity: >50KB
+                            dest.write_bytes(data)
+                            downloaded.append(pkg)
+                            logger.info(f"  Downloaded {dest.name} ({len(data) // 1024}KB)")
+                            break
+                except Exception as e:
+                    logger.warning(f"  Download failed for {pkg} ({fmt}): {e}")
+        return downloaded
+
     def run(self, skip_optional: bool = False) -> BootstrapResult:
         """Run the full GApps bootstrap."""
         result = BootstrapResult()
@@ -193,6 +223,11 @@ class GAppsBootstrap:
 
         self.gapps_dir.mkdir(parents=True, exist_ok=True)
         available = list(self.gapps_dir.glob("*.apk"))
+        # Auto-download if very few APKs present
+        if len(available) + len(list(self.gapps_dir.glob("*.xapk"))) < 3:
+            logger.info("Few APKs found — attempting auto-download...")
+            self.auto_download_apks()
+            available = list(self.gapps_dir.glob("*.apk"))
         logger.info(f"APKs in {self.gapps_dir}: {len(available)}")
         for apk in sorted(available):
             logger.info(f"  {apk.name} ({apk.stat().st_size // 1024}KB)")

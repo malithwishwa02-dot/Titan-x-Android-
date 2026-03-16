@@ -5,6 +5,7 @@ Bearer token auth using TITAN_API_SECRET environment variable.
 
 import os
 from fastapi import Request, HTTPException
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # Paths that don't require authentication
@@ -30,7 +31,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/") or path.startswith("/ws/"):
             auth_header = request.headers.get("Authorization", "")
             if not auth_header.startswith("Bearer "):
-                raise HTTPException(401, "Missing Bearer token")
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Missing Bearer token"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
             token = auth_header[7:]
             if token != secret:
                 raise HTTPException(403, "Invalid API token")

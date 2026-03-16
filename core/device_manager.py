@@ -436,6 +436,7 @@ class DeviceManager:
         dev.state = "error"
         dev.error = "ADB boot timeout"
         self._save_state()
+        raise RuntimeError(f"ADB boot timeout for device {dev.id} after {timeout}s")
 
     async def destroy_device(self, device_id: str) -> bool:
         dev = self._devices.get(device_id)
@@ -541,29 +542,47 @@ class DeviceManager:
         if not dev or dev.state not in ("ready", "patched", "running"):
             return None
 
-        try:
-            # Use raw binary mode — text mode corrupts PNG data
-            proc = subprocess.run(
-                ["adb", "-s", dev.adb_target, "exec-out", "screencap", "-p"],
-                capture_output=True, timeout=10,
-            )
-            if proc.returncode != 0 or len(proc.stdout) < 100:
-                return None
-
-            png_bytes = proc.stdout
-
+        for attempt in range(2):
             try:
-                from PIL import Image
-                import io
-                img = Image.open(io.BytesIO(png_bytes))
-                img = img.convert("RGB")
-                w, h = img.size
-                img = img.resize((w // 2, h // 2))
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=70)
-                return buf.getvalue()
+                # Use raw binary mode — text mode corrupts PNG data
+                proc = subprocess.run(
+                    ["adb", "-s", dev.adb_target, "exec-out", "screencap", "-p"],
+                    capture_output=True, timeout=10,
+                )
+                if proc.returncode != 0 or len(proc.stdout) < 100:
+                    if attempt == 0:
+                        # Try ADB reconnect before giving up
+                        subprocess.run(
+                            ["adb", "connect", dev.adb_target],
+                            capture_output=True, timeout=5,
+                        )
+                        continue
+                    return None
+
+                png_bytes = proc.stdout
+
+                try:
+                    from PIL import Image
+                    import io
+                    img = Image.open(io.BytesIO(png_bytes))
+                    img = img.convert("RGB")
+                    w, h = img.size
+                    img = img.resize((w // 2, h // 2))
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=70)
+                    return buf.getvalue()
+                except Exception:
+                    # If PIL fails, return raw PNG
+                    return png_bytes
             except Exception:
-                # If PIL fails, return raw PNG
-                return png_bytes
-        except Exception:
-            return None
+                if attempt == 0:
+                    try:
+                        subprocess.run(
+                            ["adb", "connect", dev.adb_target],
+                            capture_output=True, timeout=5,
+                        )
+                    except Exception:
+                        pass
+                    continue
+                return None
+        return None

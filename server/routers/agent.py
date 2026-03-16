@@ -26,12 +26,21 @@ def init(device_manager: DeviceManager):
     dm = device_manager
 
 
+def cleanup_agent(device_id: str):
+    """Remove agent for a deleted device."""
+    _agents.pop(device_id, None)
+
+
 def _get_agent(device_id: str):
     from device_agent import DeviceAgent
     dev = dm.get_device(device_id)
     if not dev:
         raise HTTPException(404, "Device not found")
     if device_id not in _agents:
+        # LRU cap: evict oldest if too many agents
+        if len(_agents) >= 20:
+            oldest = next(iter(_agents))
+            _agents.pop(oldest, None)
         _agents[device_id] = DeviceAgent(adb_target=dev.adb_target)
     return _agents[device_id]
 
