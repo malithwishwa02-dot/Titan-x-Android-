@@ -89,7 +89,11 @@ async def readiness_check():
     try:
         # Check if at least one device is available
         devs = dm.list_devices()
-        has_device = any(d.get("status") == "online" for d in devs)
+        has_device = any(
+            (d.get("state", "") if isinstance(d, dict) else getattr(d, "state", ""))
+            in ("ready", "patched", "running", "online")
+            for d in devs
+        )
         return {"ready": True, "devices": len(devs), "online": has_device}
     except Exception as e:
         return {"ready": False, "error": str(e)}
@@ -98,7 +102,7 @@ async def readiness_check():
 @app.get("/live")
 async def liveness_check():
     """Kubernetes-style liveness probe - is the app alive?"""
-    return {"alive": True, "version": "11.3.2"}
+    return {"alive": True, "version": "11.3.3"}
 
 
 @app.get("/health")
@@ -111,7 +115,12 @@ async def health_check():
     # ADB
     try:
         devs = dm.list_devices()
-        adb_targets = [d.get("adb_target", "") for d in devs if d.get("status") == "online"]
+        adb_targets = [
+            (d.get("adb_target", "") if isinstance(d, dict) else getattr(d, "adb_target", ""))
+            for d in devs
+            if (d.get("state", "") if isinstance(d, dict) else getattr(d, "state", ""))
+            in ("ready", "patched", "running", "online")
+        ]
         adb_ok = False
         for t in adb_targets[:1]:
             r = _sp.run(["adb", "-s", t, "shell", "echo ok"], capture_output=True, text=True, timeout=5)

@@ -22,7 +22,7 @@ from device_manager import DeviceManager
 from job_manager import inject_jobs as _inject_mgr, provision_jobs as _provision_mgr
 from profile_injector import ProfileInjector
 
-router = APIRouter(prefix="/api/genesis", tags=["genesis"])
+router = APIRouter(prefix="/api/provision", tags=["provision"])
 logger = logging.getLogger("titan.provision")
 
 dm: DeviceManager = None

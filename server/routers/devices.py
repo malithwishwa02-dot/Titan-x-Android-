@@ -5,6 +5,7 @@ Titan V11.3 — Devices Router (Cuttlefish)
 
 import asyncio
 import io
+import logging
 from typing import List
 
 from fastapi import APIRouter, HTTPException
@@ -16,6 +17,7 @@ from anomaly_patcher import AnomalyPatcher
 from device_presets import COUNTRY_DEFAULTS
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
+logger = logging.getLogger("titan.devices")
 
 # Shared device manager singleton — set by main app
 dm: DeviceManager = None

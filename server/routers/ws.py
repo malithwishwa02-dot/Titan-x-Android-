@@ -32,7 +32,7 @@ async def ws_screen(websocket: WebSocket, device_id: str):
     try:
         # ADB screencap path (~4 FPS)
         while True:
-            data = await asyncio.to_thread(dm.screenshot, device_id)
+            data = await dm.screenshot(device_id)
             if data:
                 await websocket.send_bytes(data)
             await asyncio.sleep(0.25)

@@ -386,6 +386,21 @@ docker start titan-scrcpy titan-nginx
 # Cuttlefish VMs are managed by the API — create via POST /api/devices
 ```
 
+### Windsurf Cascade Integration
+Configure Windsurf (or any Cascade/Copilot-style editor inside this stack) to consume the deployed coding API:
+
+1. Set `VASTAI_CODING_API_URL=http://1.208.108.242:23707/v1` and `VASTAI_CODING_MODEL=qwen2.5-coder:7b` via `/root/titan-v11.3-device/.env` or Windsurf settings.
+2. Point the editor’s AI assistant to the local proxy at `/api/ai/coding`; the FastAPI router forwards the OpenAI-style completion request straight to Vast.ai.
+3. Example POST body:
+```json
+{
+  "messages": [{"role": "user", "content": "Create a FastAPI POST route"}],
+  "temperature": 0.7,
+  "max_tokens": 400
+}
+```
+The response payload matches OpenAI’s schema, so Windsurf can treat this route as a drop-in Cascade/Copilot replacement.
+
 ---
 
 ## Project Structure

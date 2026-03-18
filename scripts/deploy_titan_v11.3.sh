@@ -65,6 +65,8 @@ modprobe v4l2loopback devices=4 video_nr=10,11,12,13 \
 cat > /etc/modules-load.d/titan.conf << 'EOF'
 binder_linux
 ashmem_linux
+vhost_vsock
+vhost_net
 v4l2loopback
 EOF
 
@@ -125,7 +127,7 @@ Environment=TITAN_GPU_URL=http://127.0.0.1:8765
 Environment=TITAN_GPU_OLLAMA=http://127.0.0.1:11435
 Environment=PYTHONPATH=${TITAN_DIR}/server:${TITAN_DIR}/core:/root/titan-v11-release/core
 EnvironmentFile=-${TITAN_DIR}/.env
-ExecStart=/opt/titan/venv/bin/uvicorn server.titan_api:app --host 0.0.0.0 --port 8080 --workers 2 --loop uvloop --http httptools
+ExecStart=/opt/titan/venv/bin/uvicorn titan_api:app --host 0.0.0.0 --port 8080 --workers 2 --loop uvloop --http httptools
 Restart=always
 RestartSec=5
 MemoryMax=2G

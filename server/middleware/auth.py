@@ -9,7 +9,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # Paths that don't require authentication
-PUBLIC_PATHS = {"/", "/mobile", "/static", "/docs", "/openapi.json", "/redoc"}
+PUBLIC_PATHS = {"/", "/mobile", "/static", "/docs", "/openapi.json", "/redoc",
+                "/ready", "/live", "/health"}
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

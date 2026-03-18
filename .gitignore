@@ -12,3 +12,8 @@ forge_gallery/
 node_modules/
 ssl/
 desktop/dist/
+ai-env/
+ai_client.py
+requests
+venv/
+*.log

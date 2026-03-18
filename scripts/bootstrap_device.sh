@@ -29,13 +29,13 @@ done
 # ─── Wait for ADB device ─────────────────────────────────────
 echo "[2/6] Waiting for Android device..."
 for i in $(seq 1 60); do
-  BOOT=$(adb -s 127.0.0.1:5555 shell getprop sys.boot_completed 2>/dev/null || echo "")
+  BOOT=$(adb -s 127.0.0.1:6520 shell getprop sys.boot_completed 2>/dev/null || echo "")
   if [ "$BOOT" = "1" ]; then
-    MODEL=$(adb -s 127.0.0.1:5555 shell getprop ro.product.model 2>/dev/null || echo "unknown")
+    MODEL=$(adb -s 127.0.0.1:6520 shell getprop ro.product.model 2>/dev/null || echo "unknown")
     echo "  ✓ Device booted: $MODEL"
     break
   fi
-  adb connect 127.0.0.1:5555 > /dev/null 2>&1 || true
+  adb connect 127.0.0.1:6520 > /dev/null 2>&1 || true
   sleep 3
 done
 
@@ -105,7 +105,7 @@ if [ -n "$PROFILE_ID" ]; then
   echo "  ✓ Injected! Trust score: $TRUST/100"
 
   # Fix remaining checks directly
-  ADB="adb -s 127.0.0.1:5555"
+  ADB="adb -s 127.0.0.1:6520"
   # WiFi
   $ADB shell 'mkdir -p /data/misc/wifi' 2>/dev/null
   echo '<?xml version="1.0" encoding="utf-8" standalone="yes" ?><WifiConfigStoreData><NetworkList><Network><WifiConfiguration><string name="SSID">"NETGEAR72-5G"</string><int name="Status" value="0" /></WifiConfiguration></Network></NetworkList></WifiConfigStoreData>' | $ADB shell 'cat > /data/misc/wifi/WifiConfigStore.xml' 2>/dev/null

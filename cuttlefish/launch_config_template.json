@@ -3,7 +3,8 @@
     {
       "vm": {
         "memory_mb": 4096,
-        "cpus": 4
+        "cpus": 4,
+        "gpu_mode": "guest_swiftshader"
       },
       "graphics": {
         "displays": [
@@ -14,8 +15,14 @@
           }
         ]
       },
+      "streaming": {
+        "start_webrtc": true
+      },
       "boot": {
         "extra_bootconfig_args": "androidboot.verifiedbootstate=green androidboot.vbmeta.device_state=locked sys.use_memfd=true"
+      },
+      "security": {
+        "report_anonymous_usage_stats": false
       }
     }
   ]
